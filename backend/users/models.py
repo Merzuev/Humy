@@ -16,6 +16,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_superuser', True)
         return self.create_user(email, password, **extra_fields)
 
+
 class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
         ('admin', 'Администратор'),
@@ -23,10 +24,11 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('vip', 'VIP'),
         ('user', 'Пользователь'),
     ]
-
+    language = models.CharField(max_length=20, default='en')
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=30, blank=True)
     last_name = models.CharField(max_length=30, blank=True)
+    nickname = models.CharField(max_length=50, blank=True)  # ✅ новое поле
     birth_date = models.DateField(null=True, blank=True)
     country = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100, blank=True)

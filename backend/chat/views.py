@@ -60,6 +60,11 @@ class ChatRoomCreateView(generics.CreateAPIView):
         read_serializer = ChatRoomSerializer(chat, context={'request': request})
         return Response(read_serializer.data, status=status.HTTP_201_CREATED)
 
+# 📋 Список всех чатов (для фронта: /api/chats/)
+class ChatRoomListAllView(generics.ListAPIView):
+    queryset = ChatRoom.objects.all()
+    serializer_class = ChatRoomSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
 #/////Message///////
 

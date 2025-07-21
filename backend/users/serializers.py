@@ -1,37 +1,39 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
-from .models import User
 
 User = get_user_model()
 
+
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
-    password2 = serializers.CharField(write_only=True, required=True)
+    interface_language = serializers.CharField()  # 👈 используем правильное имя
 
     class Meta:
         model = User
-        fields = ('email', 'password', 'password2')  # убираем username
-        extra_kwargs = {'email': {'required': True}}
-
-    def validate(self, attrs):
-        if attrs['password'] != attrs['password2']:
-            raise serializers.ValidationError({"password": "Пароли не совпадают."})
-        return attrs
+        fields = ['email', 'password', 'interface_language']
 
     def create(self, validated_data):
-        validated_data.pop('password2')
-        user = User.objects.create_user(
-            email=validated_data['email'],
-            password=validated_data['password']
-        )
+        password = validated_data.pop('password')
+        user = User(**validated_data)
+        user.set_password(password)
+        user.save()
         return user
+
+
 
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'email', 'first_name', 'last_name', 'birth_date', 'country',
-            'city', 'interests', 'languages', 'avatar', 'interface_language', 'theme'
+            'email',
+            'first_name',
+            'last_name',
+            'nickname',              # ✅ новое поле
+            'birth_date',
+            'country',
+            'city',
+            'interests',
+            'languages',
+            'avatar',                # ✅ поле для изображения
+            'theme',
         ]
         read_only_fields = ['email']
