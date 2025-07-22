@@ -115,7 +115,7 @@ const SearchResultItem = memo(({
 SearchResultItem.displayName = 'SearchResultItem';
 
 const PersonalMessages: React.FC = memo(() => {
-  const { user } = useContext(UserContext);
+  const { user } = useUser();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);

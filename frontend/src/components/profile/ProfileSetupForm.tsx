@@ -27,14 +27,13 @@ import {
 import apiClient from '../../api/instance';
 import { useUser } from '../../contexts/UserContext';
 
-// Validation schema
 const schema = yup.object({
-  nickname: yup.string().min(2, 'Minimum 2 characters').max(20, 'Maximum 20 characters').required('Please enter nickname'),
-  birthDate: yup.string().matches(/^\d{2}\.\d{2}\.\d{4}$/, 'Please enter date in DD.MM.YYYY format').required('Please enter birth date'),
-  country: yup.string().required('Please select country'),
-  city: yup.string().required('Please select city'),
-  languages: yup.array().of(yup.string()).min(1, 'Please select at least one language').required(),
-  interests: yup.array().of(yup.string()).min(1, 'Please add at least one interest').required(),
+  nickname: yup.string().min(2).max(20).required(),
+  birthDate: yup.string().matches(/^\d{2}\.\d{2}\.\d{4}$/).required(),
+  country: yup.string().required(),
+  city: yup.string().required(),
+  languages: yup.array().of(yup.string()).min(1).required(),
+  interests: yup.array().of(yup.string()).min(1).required(),
 }).required();
 
 type FormData = {
@@ -46,7 +45,7 @@ type FormData = {
   interests: string[];
 };
 
-const LANGUAGES = [
+const LANGUAGES = [...new Set([
   { value: 'en', label: 'English' },
   { value: 'ru', label: 'Русский' },
   { value: 'es', label: 'Español' },
@@ -62,31 +61,16 @@ const LANGUAGES = [
   { value: 'id', label: 'Bahasa Indonesia' },
   { value: 'tr', label: 'Türkçe' },
   { value: 'vi', label: 'Tiếng Việt' },
-];
+])];
 
-const LANGUAGE_OPTIONS = [
-  { value: 'en', label: '🇺🇸 EN' },
-  { value: 'ru', label: '🇷🇺 RU' },
-  { value: 'es', label: '🇪🇸 ES' },
-  { value: 'fr', label: '🇫🇷 FR' },
-  { value: 'de', label: '🇩🇪 DE' },
-  { value: 'it', label: '🇮🇹 IT' },
-  { value: 'pt', label: '🇵🇹 PT' },
-  { value: 'ja', label: '🇯🇵 JA' },
-  { value: 'ko', label: '🇰🇷 KO' },
-  { value: 'zh', label: '🇨🇳 ZH' },
-  { value: 'ar', label: '🇸🇦 AR' },
-  { value: 'hi', label: '🇮🇳 HI' },
-  { value: 'id', label: '🇮🇩 ID' },
-  { value: 'tr', label: '🇹🇷 TR' },
-  { value: 'vi', label: '🇻🇳 VI' },
-];
+const LANGUAGE_OPTIONS = [...LANGUAGES.map(l => ({ value: l.value, label: l.label }))];
 
 export function ProfileSetupForm() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { setUser } = useUser();
-  const [profileImage, setProfileImage] = useState<string | null>(null);
+  const [profileImage, setProfileImage] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>([]);
   const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
   const [customInterest, setCustomInterest] = useState('');
@@ -94,8 +78,8 @@ export function ProfileSetupForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCountry, setSelectedCountry] = useState('');
   const [selectedCity, setSelectedCity] = useState('');
-  
-  const { register, handleSubmit, formState: { errors }, setValue, watch } = useForm<FormData>({
+
+  const { register, handleSubmit, formState: { errors }, setValue } = useForm<FormData>({
     resolver: yupResolver(schema),
     defaultValues: {
       languages: [],
@@ -105,43 +89,32 @@ export function ProfileSetupForm() {
     }
   });
 
-  // Get translated interests based on current language
   const translatedInterests = getTranslatedInterests(i18n.language);
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      setProfileImage(file);
       const reader = new FileReader();
-      reader.onload = (e) => {
-        const imageUrl = e.target?.result as string;
-        setProfileImage(imageUrl);
-      };
+      reader.onload = (e) => setPreviewUrl(e.target?.result as string);
       reader.readAsDataURL(file);
     }
   };
 
   const formatBirthDate = (value: string) => {
-    // Remove all non-digits
     const digits = value.replace(/\D/g, '');
-    
-    // Format as DD.MM.YYYY
-    if (digits.length <= 2) {
-      return digits;
-    } else if (digits.length <= 4) {
-      return `${digits.slice(0, 2)}.${digits.slice(2)}`;
-    } else {
-      return `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4, 8)}`;
-    }
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+    return `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4, 8)}`;
   };
 
   const handleBirthDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const formatted = formatBirthDate(e.target.value);
-    e.target.value = formatted;
+    e.target.value = formatBirthDate(e.target.value);
   };
 
   const handleCountryChange = (country: string) => {
     setSelectedCountry(country);
-    setSelectedCity(''); // Reset city when country changes
+    setSelectedCity('');
     setValue('country', country);
     setValue('city', '');
   };
@@ -155,7 +128,6 @@ export function ProfileSetupForm() {
     const newLanguages = selectedLanguages.includes(language)
       ? selectedLanguages.filter(l => l !== language)
       : [...selectedLanguages, language];
-    
     setSelectedLanguages(newLanguages);
     setValue('languages', newLanguages);
   };
@@ -164,7 +136,6 @@ export function ProfileSetupForm() {
     const newInterests = selectedInterests.includes(interestKey)
       ? selectedInterests.filter(i => i !== interestKey)
       : [...selectedInterests, interestKey];
-    
     setSelectedInterests(newInterests);
     setValue('interests', newInterests);
   };
@@ -188,39 +159,34 @@ export function ProfileSetupForm() {
     try {
       setError(null);
       setIsLoading(true);
-      
-      // Convert birth date from DD.MM.YYYY to YYYY-MM-DD for API
       const [day, month, year] = data.birthDate.split('.');
       const birthDateISO = `${year}-${month}-${day}`;
-      
-      const profileData = {
-        nickname: data.nickname,
-        birth_date: birthDateISO,
-        country: data.country,
-        city: data.city,
-        languages: data.languages,
-        interests: data.interests,
-        profile_image: profileImage,
-      };
-      
-      const response = await apiClient.post('/profile/', profileData);
-      
-      // Update user context with profile data
+
+      const formData = new FormData();
+      formData.append('nickname', data.nickname);
+      formData.append('birth_date', birthDateISO);
+      formData.append('country', data.country);
+      formData.append('city', data.city);
+      data.languages.forEach(l => formData.append('languages', l));
+      data.interests.forEach(i => formData.append('interests', i));
+      formData.append('interface_language', i18n.language);
+      formData.append('theme', 'Светлая');
+      if (profileImage) {
+        formData.append('avatar', profileImage);
+      }
+
+      const response = await apiClient.put('/auth/profile/', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
       setUser(response.data);
-      
-      // Navigate to dashboard
       navigate('/dashboard');
     } catch (err: any) {
-      if (err.response?.data?.message) {
-        setError(err.response.data.message);
-      } else {
-        setError(t('profile.setupFailed', 'Profile setup failed. Please try again.'));
-      }
+      setError(t('profile.setupFailed', 'Profile setup failed. Please try again.'));
     } finally {
       setIsLoading(false);
     }
   };
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-2 sm:p-4 relative overflow-hidden">
       {/* Background decoration */}

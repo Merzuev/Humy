@@ -24,7 +24,6 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('vip', 'VIP'),
         ('user', 'Пользователь'),
     ]
-    language = models.CharField(max_length=20, default='en')
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=30, blank=True)
     last_name = models.CharField(max_length=30, blank=True)
@@ -35,8 +34,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     interests = models.JSONField(default=list, blank=True)
     languages = models.JSONField(default=list, blank=True)
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
-    interface_language = models.CharField(max_length=50, default='Русский')
     theme = models.CharField(max_length=50, default='Светлая')
+    interface_language = models.CharField(max_length=50, default='en')
     role = models.CharField(
         max_length=16,
         choices=ROLE_CHOICES,

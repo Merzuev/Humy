@@ -4,7 +4,6 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth import authenticate
 
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -13,57 +12,42 @@ from .serializers import RegisterSerializer, ProfileSerializer
 User = get_user_model()
 
 
-class RegisterView(APIView):
-    """
-    Регистрация пользователя по email или телефону.
-    Возвращает access и refresh токены.
-    """
-    def post(self, request):
-        data = request.data
-        identifier = data.get("email") or data.get("phone")
-        password = data.get("password")
-        language = data.get("language")
+class RegisterView(generics.CreateAPIView):
+    serializer_class = RegisterSerializer
 
-        if not identifier or not password:
-            return Response({"detail": "Email/Phone и пароль обязательны"}, status=400)
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
 
-        # Проверка существующего пользователя
-        if "@" in identifier:
-            if User.objects.filter(email=identifier).exists():
-                return Response({"detail": "Пользователь с таким email уже существует"}, status=400)
-            user = User(email=identifier, language=language)
-        else:
-            if User.objects.filter(phone=identifier).exists():
-                return Response({"detail": "Пользователь с таким номером уже существует"}, status=400)
-            user = User(phone=identifier, language=language)
+        if serializer.is_valid():
+            user = serializer.save()
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'interface_language': user.interface_language
+                }
+            }, status=status.HTTP_201_CREATED)
 
-        user.set_password(password)
-        user.save()
-
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            "access_token": str(refresh.access_token),
-            "refresh_token": str(refresh),
-        }, status=201)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class LoginView(APIView):
     """
-    Авторизация по email или телефону + пароль.
+    Авторизация по email и паролю.
     Возвращает JWT access и refresh токены.
     """
     def post(self, request):
-        identifier = request.data.get("email") or request.data.get("phone")
+        email = request.data.get("email")
         password = request.data.get("password")
 
-        if not identifier or not password:
-            return Response({"detail": "Email/Phone и пароль обязательны"}, status=400)
+        if not email or not password:
+            return Response({"detail": "Email и пароль обязательны"}, status=400)
 
         try:
-            if "@" in identifier:
-                user = User.objects.get(email=identifier)
-            else:
-                user = User.objects.get(phone=identifier)
+            user = User.objects.get(email=email)
         except User.DoesNotExist:
             return Response({"detail": "Пользователь не найден"}, status=401)
 

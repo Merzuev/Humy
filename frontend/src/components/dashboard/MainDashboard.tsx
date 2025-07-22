@@ -21,6 +21,7 @@ import { NetworkStatus } from '../common/NetworkStatus';
 import { logger } from '../../utils/logger';
 import { errorHandler, handleAsync } from '../../utils/errorHandler';
 import apiClient from '../../api/instance';
+import { useUser } from '../../contexts/UserContext';
 
 interface ChatRoom {
   id: string;
@@ -80,6 +81,7 @@ type ViewMode = 'dashboard' | 'hierarchy' | 'chat' | 'personal-messages' | 'prof
 
 export function MainDashboard() {
   const { t, i18n } = useTranslation();
+  const { user } = useUser(); 
   const [activeTab, setActiveTab] = useState<'countries' | 'chats' | 'profile' | 'settings'>('countries');
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   const [currentRoom, setCurrentRoom] = useState<RoomInfo | null>(null);
@@ -531,7 +533,16 @@ export function MainDashboard() {
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              <User className="w-5 h-5 sm:w-6 sm:h-6" />
+              {user?.avatar ? (
+                <img
+                  src={user.avatar.startsWith('http') ? user.avatar : `http://localhost:8000${user.avatar}`}
+                  alt="avatar"
+                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-full object-cover border border-white/20"
+                />
+              ) : (
+                <User className="w-5 h-5 sm:w-6 sm:h-6" />
+              )}
+
               <span className="text-xs font-medium">
                 {t('dashboard.profile', 'Профиль')}
               </span>

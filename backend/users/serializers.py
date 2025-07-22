@@ -5,18 +5,29 @@ User = get_user_model()
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    interface_language = serializers.CharField()  # 👈 используем правильное имя
+    password2 = serializers.CharField(write_only=True)
 
     class Meta:
         model = User
-        fields = ['email', 'password', 'interface_language']
+        fields = ['email', 'password', 'password2', 'interface_language']
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'password2': {'write_only': True},
+        }
+
+    def validate(self, data):
+        if data['password'] != data['password2']:
+            raise serializers.ValidationError("Пароли не совпадают.")
+        return data
 
     def create(self, validated_data):
+        validated_data.pop('password2')
         password = validated_data.pop('password')
-        user = User(**validated_data)
+        user = User.objects.create(**validated_data)
         user.set_password(password)
         user.save()
         return user
+
 
 
 
@@ -35,5 +46,6 @@ class ProfileSerializer(serializers.ModelSerializer):
             'languages',
             'avatar',                # ✅ поле для изображения
             'theme',
+            'interface_language',
         ]
         read_only_fields = ['email']

@@ -18,17 +18,21 @@ const createSchema = (inputType: 'email' | 'phone') => yup.object({
   confirmPassword: yup.string()
     .oneOf([yup.ref('password')], 'Passwords must match')
     .required('Please confirm password'),
-  language: yup.string().required('Please select language'),
+  interface_language: yup.string().required('Please select language'),
+
   agreeToTerms: yup.boolean().oneOf([true], 'You must agree to the terms'),
 }).required();
 
 type FormData = {
   identifier: string;
   password: string;
+  password2: string; // ✅ Добавляем
   confirmPassword: string;
-  language: string;
+  interface_language: string;
   agreeToTerms: boolean;
 };
+
+
 
 const LANGUAGE_OPTIONS = [
   { value: 'en', label: '🇺🇸 English' },
@@ -51,7 +55,7 @@ const LANGUAGE_OPTIONS = [
 export function RegisterForm() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { setToken } = useUser();
+  const { setToken, setUser } = useUser();
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,12 +65,12 @@ export function RegisterForm() {
   const { register, handleSubmit, formState: { errors }, watch, setValue } = useForm<FormData>({
     resolver: yupResolver(createSchema(inputType)),
     defaultValues: {
-      language: i18n.language,
+      interface_language: i18n.language,
       agreeToTerms: false,
     }
   });
 
-  const watchedLanguage = watch('language');
+  const watchedLanguage = watch('interface_language');
   const watchedAgreeToTerms = watch('agreeToTerms');
 
   const handleInputTypeChange = (type: 'email' | 'phone') => {
@@ -78,29 +82,57 @@ export function RegisterForm() {
     try {
       setError(null);
       setIsLoading(true);
-      
-      const response = await apiClient.post('/auth/register/', {
-        [inputType]: data.identifier,
-        password: data.password,
-        language: data.language
-      });
-      
-      const { access_token } = response.data;
-      setToken(access_token);
-      navigate('/setup-profile');
-    } catch (err: any) {
-      if (err.response?.status === 400) {
-        setError(t('auth.userAlreadyExists'));
-      } else {
-        setError(t('auth.registrationFailed'));
+      data.password2 = data.confirmPassword;
+
+      try {
+        const response = await apiClient.post('/register/', {
+          [inputType]: data.identifier,
+          password: data.password,
+          password2: data.password2,
+          interface_language: data.interface_language
+        });
+
+        const { access_token, refresh_token } = response.data;
+
+        setToken(access_token);
+        localStorage.setItem('refresh', refresh_token);
+
+        const profileRes = await apiClient.get('/profile/', {
+          headers: {
+            Authorization: `Bearer ${access_token}`
+          }
+        });
+
+        setUser(profileRes.data);
+
+        navigate('/setup-profile');
+      } catch (error: any) {
+        console.error('API POST /register/', error.response?.data || error.message);
+
+        if (error.response?.status === 400) {
+          const data = error.response.data;
+          if (data.email?.[0] === 'user with this email already exists.') {
+            setError(t('auth.userAlreadyExists'));
+          } else if (data.password2) {
+            setError(t('auth.passwordMismatch'));
+          } else {
+            setError(t('auth.registrationFailed'));
+          }
+        } else {
+          setError(t('auth.registrationFailed'));
+        }
+      } finally {
+        setIsLoading(false);
       }
-    } finally {
+
+    } catch (err: any) {
+      setError(t('auth.registrationFailed'));
       setIsLoading(false);
     }
   };
 
   const handleLanguageChange = (lng: string) => {
-    setValue('language', lng);
+    setValue('interface_language', lng);
     i18n.changeLanguage(lng);
   };
 
@@ -228,7 +260,7 @@ export function RegisterForm() {
                 {t('auth.interfaceLanguage')}
               </label>
               <Select
-                {...register('language')}
+                {...register('interface_language')}
                 value={watchedLanguage}
                 onChange={handleLanguageChange}
                 options={LANGUAGE_OPTIONS}

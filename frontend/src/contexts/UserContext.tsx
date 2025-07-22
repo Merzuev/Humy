@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode } from 'react';
 
 interface User {
   id: string;
@@ -25,26 +25,18 @@ interface UserContextType {
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
-export { UserContext };
-
 interface UserProviderProps {
   children: ReactNode;
 }
 
 export function UserProvider({ children }: UserProviderProps) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Load token from localStorage on app start
-    const savedToken = localStorage.getItem('accessToken');
-    if (savedToken) {
-      setToken(savedToken);
-    }
-  }, []);
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem('access'));
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => !!localStorage.getItem('access'));
 
   const handleSetToken = (newToken: string | null) => {
     setToken(newToken);
+    setIsAuthenticated(!!newToken);
     if (newToken) {
       localStorage.setItem('access', newToken);
     } else {
@@ -55,16 +47,12 @@ export function UserProvider({ children }: UserProviderProps) {
 
   const logout = () => {
     setUser(null);
-    setToken(null);
-    localStorage.removeItem('access');
-    localStorage.removeItem('refresh');
-    // Redirect to login
+    handleSetToken(null);
     window.location.href = '/login';
   };
 
   const deleteAccount = async () => {
     try {
-      // Call API to delete account
       await fetch('/api/users/me/', {
         method: 'DELETE',
         headers: {
@@ -74,36 +62,32 @@ export function UserProvider({ children }: UserProviderProps) {
       });
     } catch (error) {
       console.error('Failed to delete account:', error);
-      // Continue with logout even if API call fails
     } finally {
-      // Clear all data and redirect
       setUser(null);
-      setToken(null);
+      handleSetToken(null);
       localStorage.clear();
       window.location.href = '/register';
     }
   };
 
-  const isAuthenticated = !!token;
+  const contextValue: UserContextType = {
+    user,
+    setUser,
+    token,
+    setToken: handleSetToken,
+    isAuthenticated,
+    logout,
+    deleteAccount,
+  };
 
   return (
-    <UserContext.Provider
-      value={{
-        user,
-        setUser,
-        token,
-        setToken: handleSetToken,
-        isAuthenticated,
-        logout,
-        deleteAccount,
-      }}
-    >
+    <UserContext.Provider value={contextValue}>
       {children}
     </UserContext.Provider>
   );
 }
 
-export function useUser() {
+export function useUser(): UserContextType {
   const context = useContext(UserContext);
   if (context === undefined) {
     throw new Error('useUser must be used within a UserProvider');
