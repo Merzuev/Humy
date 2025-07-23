@@ -1,19 +1,20 @@
 import React from 'react';
 import { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next'; // 🌍 Добавляем доступ к i18n
 import { UserProvider } from './contexts/UserContext';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { logger } from './utils/logger';
 import './i18n';
 
-// Lazy load components for better performance
+// 🚀 Лениво загружаемые компоненты
 const LoginForm = lazy(() => import('./components/auth/LoginForm').then(module => ({ default: module.LoginForm })));
 const RegisterForm = lazy(() => import('./components/auth/RegisterForm').then(module => ({ default: module.RegisterForm })));
 const ProfileSetupForm = lazy(() => import('./components/profile/ProfileSetupForm').then(module => ({ default: module.ProfileSetupForm })));
 const MainDashboard = lazy(() => import('./components/dashboard/MainDashboard').then(module => ({ default: module.MainDashboard })));
 
-// Loading component
+// ⏳ Компонент загрузки
 const LoadingSpinner = () => (
   <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
     <div className="text-center">
@@ -24,7 +25,9 @@ const LoadingSpinner = () => (
 );
 
 function App() {
-  // Log app initialization
+  const { i18n } = useTranslation(); // 🌐 Подключаем i18n
+
+  // ✅ Блок 1: логирование запуска приложения
   React.useEffect(() => {
     logger.info('App initialized', {
       userAgent: navigator.userAgent,
@@ -33,7 +36,14 @@ function App() {
     });
   }, []);
 
+  // ✅ Блок 2: установка языка интерфейса из localStorage при запуске
+  React.useEffect(() => {
+    const lang = localStorage.getItem('i18nextLng') || 'en';
+    i18n.changeLanguage(lang);
+  }, []);
+
   return (
+    // ✅ Блок 3: глобальный перехват ошибок
     <ErrorBoundary
       onError={(error, errorInfo) => {
         logger.error('App-level error caught by ErrorBoundary', {
@@ -43,20 +53,26 @@ function App() {
         });
       }}
     >
+      {/* ✅ Блок 4: контекст пользователя + маршруты */}
       <UserProvider>
         <Router>
           <Suspense fallback={<LoadingSpinner />}>
             <Routes>
+              {/* Страница логина */}
               <Route path="/login" element={
                 <ErrorBoundary>
                   <LoginForm />
                 </ErrorBoundary>
               } />
+
+              {/* Страница регистрации */}
               <Route path="/register" element={
                 <ErrorBoundary>
                   <RegisterForm />
                 </ErrorBoundary>
               } />
+
+              {/* Страница заполнения профиля */}
               <Route 
                 path="/setup-profile" 
                 element={
@@ -67,6 +83,8 @@ function App() {
                   </ErrorBoundary>
                 } 
               />
+
+              {/* Главная страница (дашборд) */}
               <Route 
                 path="/dashboard" 
                 element={
@@ -77,6 +95,8 @@ function App() {
                   </ErrorBoundary>
                 } 
               />
+
+              {/* Корневой путь → редирект на дашборд */}
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </Suspense>

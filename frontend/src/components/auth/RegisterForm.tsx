@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
@@ -61,7 +61,9 @@ export function RegisterForm() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [inputType, setInputType] = useState<'email' | 'phone'>('email');
-  
+  const [selectedLanguageOption, setSelectedLanguageOption] = useState(
+  LANGUAGE_OPTIONS.find(opt => opt.value === i18n.language) || LANGUAGE_OPTIONS[0]
+);
   const { register, handleSubmit, formState: { errors }, watch, setValue } = useForm<FormData>({
     resolver: yupResolver(createSchema(inputType)),
     defaultValues: {
@@ -72,6 +74,14 @@ export function RegisterForm() {
 
   const watchedLanguage = watch('interface_language');
   const watchedAgreeToTerms = watch('agreeToTerms');
+
+  useEffect(() => {
+    if (watchedLanguage && i18n.language !== watchedLanguage) {
+      i18n.changeLanguage(watchedLanguage);
+      localStorage.setItem('i18nextLng', watchedLanguage);
+    }
+  }, [watchedLanguage, i18n]);
+
 
   const handleInputTypeChange = (type: 'email' | 'phone') => {
     setInputType(type);
@@ -131,12 +141,12 @@ export function RegisterForm() {
     }
   };
 
-  const handleLanguageChange = (selectedOption: { value: string; label: string } | null) => {
-    if (!selectedOption) return;
-    setValue('interface_language', selectedOption.value);
-    i18n.changeLanguage(selectedOption.value);
-    localStorage.setItem('interface_language', selectedOption.value);
-  };
+  const handleLanguageChange = (selectedOption: { value: string; label: string }) => {
+    setSelectedLanguageOption(selectedOption); // обновляем выбранный язык
+    setValue('interface_language', selectedOption.value); // обновляем поле формы
+    i18n.changeLanguage(selectedOption.value); // переключаем язык в i18n
+    localStorage.setItem('i18nextLng', selectedOption.value); // сохраняем в браузер
+};
 
 
   return (
@@ -262,13 +272,18 @@ export function RegisterForm() {
               <label className="block text-sm font-medium text-gray-300">
                 {t('auth.interfaceLanguage')}
               </label>
-              <Select
+             <Select
                 {...register('interface_language')}
                 value={LANGUAGE_OPTIONS.find(opt => opt.value === watchedLanguage)}
-                onChange={handleLanguageChange}
+                onChange={(selectedOption: any) => {
+                  const selectedLang = selectedOption.value;
+                  setValue('interface_language', selectedLang); // обновляем форму
+                  i18n.changeLanguage(selectedLang); // меняем язык
+                  localStorage.setItem('i18nextLng', selectedLang); // сохраняем
+                }}
                 options={LANGUAGE_OPTIONS}
                 className="w-full"
-              />
+/>
               {errors.language && (
                 <p className="text-sm text-red-400">{errors.language.message}</p>
               )}

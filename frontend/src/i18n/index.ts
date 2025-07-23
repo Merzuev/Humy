@@ -1,5 +1,6 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
+import LanguageDetector from 'i18next-browser-languagedetector';
 
 const resources = {
   en: {
@@ -2916,13 +2917,13 @@ const resources = {
 };
 
 i18n
-  .use(initReactI18next)
+  .use(LanguageDetector) // ✅ детектор языка (из localStorage, cookie и т.д.)
+  .use(initReactI18next) // подключаем к React
   .init({
     resources,
-    lng: 'en',
-    fallbackLng: 'en',
+    fallbackLng: 'en', // язык по умолчанию
     interpolation: {
-      escapeValue: false,
+      escapeValue: false, // для React не нужно
     },
   });
 
