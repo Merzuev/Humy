@@ -70,6 +70,9 @@ export function LoginForm() {
       
       const { access_token } = response.data;
       setToken(access_token);
+      const profile = await apiClient.get("/profile/");
+      setUser(profile.data);
+
       navigate('/dashboard');
     } catch (err: any) {
       if (err.response?.status === 401) {

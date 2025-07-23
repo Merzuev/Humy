@@ -131,10 +131,13 @@ export function RegisterForm() {
     }
   };
 
-  const handleLanguageChange = (lng: string) => {
-    setValue('interface_language', lng);
-    i18n.changeLanguage(lng);
+  const handleLanguageChange = (selectedOption: { value: string; label: string } | null) => {
+    if (!selectedOption) return;
+    setValue('interface_language', selectedOption.value);
+    i18n.changeLanguage(selectedOption.value);
+    localStorage.setItem('interface_language', selectedOption.value);
   };
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-2 sm:p-4 relative overflow-hidden">
@@ -261,7 +264,7 @@ export function RegisterForm() {
               </label>
               <Select
                 {...register('interface_language')}
-                value={watchedLanguage}
+                value={LANGUAGE_OPTIONS.find(opt => opt.value === watchedLanguage)}
                 onChange={handleLanguageChange}
                 options={LANGUAGE_OPTIONS}
                 className="w-full"

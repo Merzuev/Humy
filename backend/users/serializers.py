@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+import json
 
 User = get_user_model()
 
@@ -35,17 +36,31 @@ class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
+            'id',
             'email',
             'first_name',
             'last_name',
-            'nickname',              # ✅ новое поле
+            'nickname',
             'birth_date',
             'country',
             'city',
             'interests',
             'languages',
-            'avatar',                # ✅ поле для изображения
+            'avatar',
             'theme',
             'interface_language',
         ]
         read_only_fields = ['email']
+
+    def to_internal_value(self, data):
+        data = data.copy()
+        for field in ['languages', 'interests']:
+            value = data.get(field)
+            if isinstance(value, str):
+                try:
+                    data[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    raise serializers.ValidationError({
+                        field: 'Неверный формат. Ожидался список (array).'
+                    })
+        return super().to_internal_value(data)

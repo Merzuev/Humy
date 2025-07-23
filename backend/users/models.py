@@ -1,5 +1,7 @@
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 from django.db import models
+from django.db.models import JSONField
+
 
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -31,8 +33,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     birth_date = models.DateField(null=True, blank=True)
     country = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100, blank=True)
-    interests = models.JSONField(default=list, blank=True)
-    languages = models.JSONField(default=list, blank=True)
+    languages = JSONField(default=list, blank=True)
+    interests = JSONField(default=list, blank=True)
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
     theme = models.CharField(max_length=50, default='Светлая')
     interface_language = models.CharField(max_length=50, default='en')

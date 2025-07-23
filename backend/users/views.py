@@ -13,6 +13,10 @@ User = get_user_model()
 
 
 class RegisterView(generics.CreateAPIView):
+    """
+    Регистрация нового пользователя.
+    Возвращает access и refresh токены, а также базовую информацию о пользователе.
+    """
     serializer_class = RegisterSerializer
 
     def post(self, request, *args, **kwargs):
@@ -22,12 +26,12 @@ class RegisterView(generics.CreateAPIView):
             user = serializer.save()
             refresh = RefreshToken.for_user(user)
             return Response({
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-                'user': {
-                    'id': user.id,
-                    'email': user.email,
-                    'interface_language': user.interface_language
+                "access_token": str(refresh.access_token),
+                "refresh_token": str(refresh),
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "interface_language": user.interface_language
                 }
             }, status=status.HTTP_201_CREATED)
 
@@ -44,36 +48,37 @@ class LoginView(APIView):
         password = request.data.get("password")
 
         if not email or not password:
-            return Response({"detail": "Email и пароль обязательны"}, status=400)
+            return Response({"detail": "Email и пароль обязательны"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            return Response({"detail": "Пользователь не найден"}, status=401)
+            return Response({"detail": "Пользователь не найден"}, status=status.HTTP_401_UNAUTHORIZED)
 
         if not user.check_password(password):
-            return Response({"detail": "Неверный пароль"}, status=401)
+            return Response({"detail": "Неверный пароль"}, status=status.HTTP_401_UNAUTHORIZED)
 
         refresh = RefreshToken.for_user(user)
         return Response({
             "access_token": str(refresh.access_token),
             "refresh_token": str(refresh),
-        })
+        }, status=status.HTTP_200_OK)
 
 
 class ProfileView(APIView):
     """
-    Получение и обновление профиля.
+    Получение и обновление профиля пользователя.
+    Доступно только авторизованным пользователям.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         serializer = ProfileSerializer(request.user)
-        return Response(serializer.data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request):
         serializer = ProfileSerializer(request.user, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -4,22 +4,16 @@ from .models import User
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ('email', 'first_name', 'last_name', 'is_staff')
-    search_fields = ('email', 'first_name', 'last_name')
-    ordering = ('email',)
-    # ❌ Удаляем filter_horizontal — он не подходит для JSONField
     fieldsets = (
-        (None, {'fields': ('email', 'password')}),
-        ('Личная информация', {
-            'fields': ('first_name', 'last_name', 'avatar', 'birth_date', 'country', 'city', 'interests', 'languages')
-        }),
-        ('Настройки интерфейса', {'fields': ('interface_language', 'theme')}),
-        ('Разрешения', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
-        ('Дополнительно', {'fields': ('last_login',)}),
+        (None, {"fields": ("email", "password")}),
+        ("Профиль", {"fields": (
+            "first_name", "last_name", "nickname", "birth_date",
+            "country", "city", "avatar", "languages", "interests",
+            "theme", "interface_language"
+        )}),
+        ("Права", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
+        ("Даты", {"fields": ("last_login",)}),
     )
-    add_fieldsets = (
-        (None, {
-            'classes': ('wide',),
-            'fields': ('email', 'password1', 'password2'),
-        }),
-    )
+    list_display = ("email", "nickname", "country", "city")
+    search_fields = ("email", "nickname", "country", "city")
+    ordering = ("email",)  # ✅ здесь была ошибка: было 'username'

@@ -167,16 +167,19 @@ export function ProfileSetupForm() {
       formData.append('birth_date', birthDateISO);
       formData.append('country', data.country);
       formData.append('city', data.city);
-      data.languages.forEach(l => formData.append('languages', l));
-      data.interests.forEach(i => formData.append('interests', i));
+      formData.set('languages', JSON.stringify(data.languages));
+      formData.set('interests', JSON.stringify(data.interests));
+
+
+
       formData.append('interface_language', i18n.language);
       formData.append('theme', 'Светлая');
+
       if (profileImage) {
         formData.append('avatar', profileImage);
       }
 
-      const response = await apiClient.put('/auth/profile/', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      const response = await apiClient.put("/profile/", formData, {
       });
 
       setUser(response.data);
