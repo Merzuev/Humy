@@ -63,13 +63,13 @@ export function LoginForm() {
       setError(null);
       setIsLoading(true);
       
-      const response = await apiClient.post('/auth/login/', {
+      const response = await apiClient.post('/api/login/', {
         [inputType]: data.identifier,
         password: data.password,
       });
       
-      const { access_token } = response.data;
-      setToken(access_token);
+      const { access } = response.data;
+      setToken(access);
       const profile = await apiClient.get("/profile/");
       setUser(profile.data);
 

@@ -6,31 +6,58 @@ User = get_user_model()
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password2 = serializers.CharField(write_only=True)
+    nickname = serializers.CharField(required=True)
+    country = serializers.CharField(required=True)
+    city = serializers.CharField(required=True)
+    avatar = serializers.ImageField(required=False, allow_null=True)
+    interests = serializers.JSONField(required=False)
+    languages = serializers.JSONField(required=False)
+    phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = User
-        fields = ['email', 'password', 'password2', 'interface_language']
+        fields = [
+            'email',
+            'phone',
+            'password',
+            'interface_language',
+            'nickname',
+            'country',
+            'city',
+            'avatar',
+            'interests',
+            'languages'
+        ]
         extra_kwargs = {
-            'password': {'write_only': True},
-            'password2': {'write_only': True},
+            'password': {'write_only': True}
         }
 
-    def validate(self, data):
-        if data['password'] != data['password2']:
-            raise serializers.ValidationError("Пароли не совпадают.")
-        return data
+    def validate(self, attrs):
+        email = attrs.get('email')
+        phone = attrs.get('phone')
+
+        if not email and not phone:
+            raise serializers.ValidationError("Нужно указать email или номер телефона.")
+
+        return attrs
 
     def create(self, validated_data):
-        validated_data.pop('password2')
         password = validated_data.pop('password')
-        user = User.objects.create(**validated_data)
+
+        # Обработка интересов и языков (если пришли строкой — превращаем в список)
+        for field in ['interests', 'languages']:
+            value = validated_data.get(field)
+            if isinstance(value, str):
+                try:
+                    validated_data[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    validated_data[field] = []
+
+        user = User(**validated_data)
         user.set_password(password)
         user.save()
         return user
-
-
-
 
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:

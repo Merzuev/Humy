@@ -3,7 +3,10 @@ import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useContext, useEffect } from 'react';
+import { UserContext } from '../../context/UserContext';
+
 import { 
   User, 
   Calendar, 
@@ -68,7 +71,9 @@ const LANGUAGE_OPTIONS = [...LANGUAGES.map(l => ({ value: l.value, label: l.labe
 export function ProfileSetupForm() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { setUser } = useUser();
+  const location = useLocation();
+  const registrationData = location.state || {};
+  const { setUser, setToken } = useUser();
   const [profileImage, setProfileImage] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>([]);
@@ -159,37 +164,65 @@ export function ProfileSetupForm() {
     try {
       setError(null);
       setIsLoading(true);
+
       const [day, month, year] = data.birthDate.split('.');
       const birthDateISO = `${year}-${month}-${day}`;
 
       const formData = new FormData();
-      formData.append('nickname', data.nickname);
       formData.append('birth_date', birthDateISO);
+      formData.append('nickname', data.nickname);
       formData.append('country', data.country);
       formData.append('city', data.city);
       formData.set('languages', JSON.stringify(data.languages));
       formData.set('interests', JSON.stringify(data.interests));
-
-
-
-      formData.append('interface_language', i18n.language);
+      formData.append('interface_language', registrationData.interface_language || i18n.language);
       formData.append('theme', 'Светлая');
 
-      if (profileImage) {
-        formData.append('avatar', profileImage);
+      if (data.avatar && data.avatar[0]) {
+        formData.append('avatar', data.avatar[0]); // ✅ именно файл
       }
 
-      const response = await apiClient.put("/profile/", formData, {
-      });
+      if (registrationData.inputType === 'phone') {
+        formData.append('phone', registrationData.identifier);
+      } else {
+        formData.append('email', registrationData.identifier);
+      }
 
-      setUser(response.data);
-      navigate('/dashboard');
-    } catch (err: any) {
-      setError(t('profile.setupFailed', 'Profile setup failed. Please try again.'));
+      formData.append('password', registrationData.password);
+      formData.append('password2', registrationData.password);
+
+      // ⬇️ 1. Регистрируем пользователя и получаем токены
+      const response = await apiClient.post('/register/', formData);
+
+      if (response.status === 201 || response.status === 200) {
+        const { access, refresh } = response.data;
+
+        // ⬇️ 2. Сохраняем токены и отмечаем авторизацию
+        localStorage.setItem('access', access);
+        localStorage.setItem('refresh_token', refresh);
+        setToken(access);
+
+        // ⬇️ 3. Загружаем профиль
+        const profileRes = await apiClient.get('/profile/', {
+          headers: { Authorization: `Bearer ${access}` }
+        });
+
+        setUser(profileRes.data);
+
+        // ⬇️ 4. Переход на дашборд
+        navigate('/dashboard');
+      } else {
+        setError('Ошибка регистрации. Попробуйте ещё раз.');
+      }
+    } catch (error) {
+      console.error('Ошибка при регистрации:', error);
+      setError('Произошла ошибка. Попробуйте позже.');
     } finally {
       setIsLoading(false);
     }
   };
+
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-2 sm:p-4 relative overflow-hidden">
       {/* Background decoration */}

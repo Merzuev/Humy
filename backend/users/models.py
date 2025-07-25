@@ -26,7 +26,8 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('vip', 'VIP'),
         ('user', 'Пользователь'),
     ]
-    email = models.EmailField(unique=True)
+    email = models.EmailField(unique=True, null=True, blank=True)
+    phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
     first_name = models.CharField(max_length=30, blank=True)
     last_name = models.CharField(max_length=30, blank=True)
     nickname = models.CharField(max_length=50, blank=True)  # ✅ новое поле

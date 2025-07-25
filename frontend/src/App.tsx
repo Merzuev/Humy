@@ -77,9 +77,7 @@ function App() {
                 path="/setup-profile" 
                 element={
                   <ErrorBoundary>
-                    <ProtectedRoute>
                       <ProfileSetupForm />
-                    </ProtectedRoute>
                   </ErrorBoundary>
                 } 
               />

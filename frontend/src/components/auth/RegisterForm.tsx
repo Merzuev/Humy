@@ -89,64 +89,24 @@ export function RegisterForm() {
   };
 
   const onSubmit = async (data: FormData) => {
-    try {
-      setError(null);
-      setIsLoading(true);
-      data.password2 = data.confirmPassword;
-
-      try {
-        const response = await apiClient.post('/register/', {
-          [inputType]: data.identifier,
-          password: data.password,
-          password2: data.password2,
-          interface_language: data.interface_language
-        });
-
-        const { access_token, refresh_token } = response.data;
-
-        setToken(access_token);
-        localStorage.setItem('refresh', refresh_token);
-
-        const profileRes = await apiClient.get('/profile/', {
-          headers: {
-            Authorization: `Bearer ${access_token}`
-          }
-        });
-
-        setUser(profileRes.data);
-
-        navigate('/setup-profile');
-      } catch (error: any) {
-        console.error('API POST /register/', error.response?.data || error.message);
-
-        if (error.response?.status === 400) {
-          const data = error.response.data;
-          if (data.email?.[0] === 'user with this email already exists.') {
-            setError(t('auth.userAlreadyExists'));
-          } else if (data.password2) {
-            setError(t('auth.passwordMismatch'));
-          } else {
-            setError(t('auth.registrationFailed'));
-          }
-        } else {
-          setError(t('auth.registrationFailed'));
-        }
-      } finally {
-        setIsLoading(false);
+    navigate('/setup-profile', {
+      state: {
+        identifier: data.identifier,
+        password: data.password,
+        interface_language: data.interface_language,
+        inputType: inputType
       }
-
-    } catch (err: any) {
-      setError(t('auth.registrationFailed'));
-      setIsLoading(false);
-    }
+    });
   };
 
-  const handleLanguageChange = (selectedOption: { value: string; label: string }) => {
-    setSelectedLanguageOption(selectedOption); // обновляем выбранный язык
-    setValue('interface_language', selectedOption.value); // обновляем поле формы
-    i18n.changeLanguage(selectedOption.value); // переключаем язык в i18n
-    localStorage.setItem('i18nextLng', selectedOption.value); // сохраняем в браузер
-};
+
+  const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newLang = e.target.value;
+    setValue('interface_language', newLang);
+    i18n.changeLanguage(newLang);
+    localStorage.setItem('i18nextLng', newLang);
+  };
+
 
 
   return (
@@ -274,17 +234,15 @@ export function RegisterForm() {
               </label>
              <Select
                 {...register('interface_language')}
-                value={LANGUAGE_OPTIONS.find(opt => opt.value === watchedLanguage)}
-                onChange={(selectedOption: any) => {
-                  const selectedLang = selectedOption.value;
-                  setValue('interface_language', selectedLang); // обновляем форму
-                  i18n.changeLanguage(selectedLang); // меняем язык
-                  localStorage.setItem('i18nextLng', selectedLang); // сохраняем
+                onChange={(e) => {
+                  const newLang = e.target.value;
+                  setValue('interface_language', newLang);
+                  i18n.changeLanguage(newLang);
+                  localStorage.setItem('i18nextLng', newLang);
                 }}
                 options={LANGUAGE_OPTIONS}
-                className="w-full"
-/>
-              {errors.language && (
+              />
+              {errors.interface_language && (
                 <p className="text-sm text-red-400">{errors.language.message}</p>
               )}
             </div>

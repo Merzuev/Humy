@@ -6,8 +6,8 @@ from rest_framework_simplejwt.tokens import AccessToken
 @database_sync_to_async
 def get_user(token):
     try:
-        access_token = AccessToken(token)
-        user_id = access_token['user_id']
+        access = AccessToken(token)
+        user_id = access['user_id']
         from users.models import User
         return User.objects.get(id=user_id)
     except Exception:
