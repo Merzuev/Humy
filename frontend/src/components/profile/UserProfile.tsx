@@ -110,7 +110,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
       setIsLoading(true);
       setError(null);
       
-      const response = await apiClient.get('/users/me');
+      const response = await apiClient.get('/api/profile/');
       const userData = response.data;
       
       // Convert birth_date from YYYY-MM-DD to DD.MM.YYYY for display
@@ -125,7 +125,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
         city: userData.city || '',
         languages: userData.languages || [],
         interests: userData.interests || [],
-        profileImage: userData.profile_image,
+        profileImage: userData.avatar,
         email: userData.email || '',
         phone: userData.phone || ''
       };
@@ -633,7 +633,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
       </div>
 
       {/* Custom Scrollbar Styles */}
-      <style jsx>{`
+      <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 4px;
         }

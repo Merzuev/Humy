@@ -105,7 +105,7 @@ export function MainDashboard() {
     setError(null);
     
     const { data, error: apiError } = await handleAsync(
-      () => apiClient.get('/chats/'),
+      () => apiClient.get('/api/chats/'),
       'loadChatRooms'
     );
     
@@ -565,7 +565,7 @@ export function MainDashboard() {
         </nav>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 4px;
         }

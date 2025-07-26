@@ -5,8 +5,7 @@ import * as yup from 'yup';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useContext, useEffect } from 'react';
-import { UserContext } from '../../context/UserContext';
-
+import { UserContext, } from '../../context/UserContext';
 import { 
   User, 
   Calendar, 
@@ -179,41 +178,37 @@ export function ProfileSetupForm() {
       formData.append('theme', 'Светлая');
 
       if (data.avatar && data.avatar[0]) {
-        formData.append('avatar', data.avatar[0]); // ✅ именно файл
+        formData.append('avatar', data.avatar[0]);
       }
 
-      if (registrationData.inputType === 'phone') {
-        formData.append('phone', registrationData.identifier);
-      } else {
-        formData.append('email', registrationData.identifier);
-      }
-
+      const identifierField = registrationData.inputType === 'phone' ? 'phone' : 'email';
+      formData.append(identifierField, registrationData.identifier);
       formData.append('password', registrationData.password);
       formData.append('password2', registrationData.password);
 
-      // ⬇️ 1. Регистрируем пользователя и получаем токены
-      const response = await apiClient.post('/register/', formData);
+      // 1. Регистрируем пользователя
+      await apiClient.post('/api/register/', formData);
 
-      if (response.status === 201 || response.status === 200) {
-        const { access, refresh } = response.data;
+      // 2. Получаем токены через /auth/jwt/create/
+      const loginResponse = await apiClient.post('/auth/jwt/create/', {
+        [identifierField]: registrationData.identifier,
+        password: registrationData.password,
+      });
 
-        // ⬇️ 2. Сохраняем токены и отмечаем авторизацию
-        localStorage.setItem('access', access);
-        localStorage.setItem('refresh_token', refresh);
-        setToken(access);
+      const { access, refresh } = loginResponse.data;
+      localStorage.setItem('access', access);
+      localStorage.setItem('refresh_token', refresh);
+      setToken(access);
 
-        // ⬇️ 3. Загружаем профиль
-        const profileRes = await apiClient.get('/profile/', {
-          headers: { Authorization: `Bearer ${access}` }
-        });
+      // 3. Получаем профиль
+      const profileRes = await apiClient.get('/api/profile/', {
+        headers: { Authorization: `Bearer ${access}` }
+      });
 
-        setUser(profileRes.data);
+      setUser(profileRes.data);
 
-        // ⬇️ 4. Переход на дашборд
-        navigate('/dashboard');
-      } else {
-        setError('Ошибка регистрации. Попробуйте ещё раз.');
-      }
+      // 4. Переход на дашборд
+      navigate('/dashboard');
     } catch (error) {
       console.error('Ошибка при регистрации:', error);
       setError('Произошла ошибка. Попробуйте позже.');

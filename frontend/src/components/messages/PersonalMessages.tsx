@@ -2,8 +2,9 @@ import React, { useState, useEffect, useContext, useCallback, useMemo, memo } fr
 import { Search, Plus, Send, ArrowLeft, User, MessageCircle, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { UserContext } from '../../contexts/UserContext';
+import { UserContext, useUser } from '../../contexts/UserContext';
 import apiClient from '../../api/instance';
+
 
 interface Contact {
   id: string;

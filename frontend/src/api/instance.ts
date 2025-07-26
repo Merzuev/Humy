@@ -4,7 +4,7 @@ import { logger, loggedApiCall } from '../utils/logger';
 import { errorHandler, ErrorCode } from '../utils/errorHandler';
 
 const apiClient = axios.create({
-  baseURL: process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',

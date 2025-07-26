@@ -9,6 +9,8 @@ import apiClient from '../../api/instance';
 import { Button, Input, Select } from '../ui';
 import { useUser } from '../../contexts/UserContext';
 
+
+
 // Validation schema
 const createSchema = (inputType: 'email' | 'phone') => yup.object({
   identifier: inputType === 'email' 
@@ -43,7 +45,7 @@ const LANGUAGE_OPTIONS = [
 export function LoginForm() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { setToken } = useUser();
+  const { setToken, setUser } = useUser();
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -62,28 +64,36 @@ export function LoginForm() {
     try {
       setError(null);
       setIsLoading(true);
-      
-      const response = await apiClient.post('/api/login/', {
+
+      const response = await apiClient.post('/auth/jwt/create/', {
         [inputType]: data.identifier,
         password: data.password,
       });
-      
-      const { access } = response.data;
-      setToken(access);
-      const profile = await apiClient.get("/profile/");
-      setUser(profile.data);
 
-      navigate('/dashboard');
+      const { access, refresh } = response.data;
+      localStorage.setItem('access', access);
+      localStorage.setItem('refresh_token', refresh);
+      setToken(access);
+
+      const profileRes = await apiClient.get('/api/profile/', {
+        headers: { Authorization: `Bearer ${access}` }
+      });
+      setUser(profileRes.data);
+
+      // 🔁 Важно: дожидаемся полной установки user/token перед переходом
+      setTimeout(() => navigate('/dashboard'), 50);
     } catch (err: any) {
       if (err.response?.status === 401) {
-        setError(t('auth.invalidCredentials'));
+        setError('Неверный логин или пароль');
       } else {
-        setError(t('auth.loginFailed'));
+        setError('Произошла ошибка при входе');
       }
     } finally {
       setIsLoading(false);
     }
   };
+
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-2 sm:p-4 relative overflow-hidden">
@@ -186,7 +196,7 @@ export function LoginForm() {
                 <p className="text-red-400 text-sm text-center">{error}</p>
               </div>
             )}
-            label={t('auth.password')}
+            
 
             <Button 
               type="submit" 

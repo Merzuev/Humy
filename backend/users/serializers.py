@@ -60,6 +60,8 @@ class RegisterSerializer(serializers.ModelSerializer):
         return user
 
 class ProfileSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(use_url=True)
+    
     class Meta:
         model = User
         fields = [
