@@ -14,7 +14,8 @@ class RegisterSerializer(serializers.ModelSerializer):
     languages = serializers.JSONField(required=False)
     phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
-
+    birth_date = serializers.DateField(required=False)
+    
     class Meta:
         model = User
         fields = [

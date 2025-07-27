@@ -25,6 +25,7 @@ import {
 } from '../../data/locations';
 import apiClient from '../../api/instance';
 import { useUser } from '../../contexts/UserContext';
+import axios from 'axios';
 
 interface UserProfileData {
   nickname: string;
@@ -80,7 +81,7 @@ const LANGUAGE_OPTIONS = [
 
 export function UserProfile({ onBack }: UserProfileProps) {
   const { t, i18n } = useTranslation();
-  const { user, setUser } = useUser();
+  const { user, setUser, token } = useUser();
   const [isEditing, setIsEditing] = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -132,7 +133,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
       
       setProfileData(profileData);
       setEditData(profileData);
-      setProfileImage(userData.profile_image || null);
+      setProfileImage(userData.avatar || null);
       
       // Update user context
       setUser(userData);
@@ -157,41 +158,55 @@ export function UserProfile({ onBack }: UserProfileProps) {
   };
 
   const handleSave = async () => {
+    setIsLoading(true);
+    setError(null);
+
     try {
-      setIsSaving(true);
-      setError(null);
-      
-      // Convert birth date from DD.MM.YYYY to YYYY-MM-DD for API
-      const [day, month, year] = editData.birthDate.split('.');
-      const birthDateISO = `${year}-${month}-${day}`;
-      
-      const updateData = {
-        nickname: editData.nickname,
-        birth_date: birthDateISO,
-        country: editData.country,
-        city: editData.city,
-        languages: editData.languages,
-        interests: editData.interests,
-        profile_image: profileImage,
-      };
-      
-      const response = await apiClient.put('/profile/', updateData);
-      
-      setProfileData(editData);
-      setIsEditing(false);
-      
-      // Update user context
+      const values = editData;
+      const formData = new FormData();
+
+
+      formData.append('nickname', values.nickname);
+      formData.append('birth_date', formattedDate);
+      formData.append('country', values.country);
+      formData.append('city', values.city);
+      formData.append('interface_language', values.interface_language);
+      formData.append('theme', values.theme);
+
+      formData.append('languages', JSON.stringify(values.languages || []));
+      formData.append('interests', JSON.stringify(values.interests || []));
+
+
+      if (values.avatar && values.avatar instanceof File) {
+        formData.append('avatar', values.avatar);
+      }
+      const response = await apiClient.put('/api/profile/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
       setUser(response.data);
+      setProfileData(response.data);
+      setIsEditing(false);
     } catch (err: any) {
-      if (err.response?.data?.message) {
-        setError(err.response.data.message);
+      if (err.response?.data) {
+        console.error("Ошибка при сохранении профиля:", err.response.data);
+        setError(
+          typeof err.response.data === 'string'
+            ? err.response.data
+            : JSON.stringify(err.response.data, null, 2)
+        );
       } else {
-        setError(t('profile.saveFailed', 'Failed to save profile'));
+        console.error("Неизвестная ошибка:", err);
+        setError("Произошла неизвестная ошибка при сохранении профиля.");
       }
     } finally {
-      setIsSaving(false);
+      setIsLoading(false);
     }
   };
+
+
 
   const handleCancel = () => {
     setEditData(profileData);
@@ -326,12 +341,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
                 </Button>
               </div>
             )}
-            <Select
-              value={i18n.language}
-              onChange={(lng) => i18n.changeLanguage(lng)}
-              options={LANGUAGE_OPTIONS}
-              className="text-xs"
-            />
+            
           </div>
         </header>
 
@@ -348,15 +358,15 @@ export function UserProfile({ onBack }: UserProfileProps) {
               <div className="flex flex-col items-center space-y-4 sm:space-y-6 mb-6 sm:mb-8">
                 <div className="relative">
                   <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center overflow-hidden border-2 sm:border-4 border-white/30 shadow-2xl">
-                    {profileImage || profileData.profileImage ? (
-                      <img 
-                        src={profileImage || profileData.profileImage} 
-                        alt="Profile" 
-                        className="w-full h-full object-cover" 
+                    {user?.avatar ? (
+                      <img
+                        src={user.avatar.startsWith('http') ? user.avatar : `http://localhost:8000${user.avatar}`}
+                        alt="Profile"
+                        className="w-full h-full object-cover"
                       />
                     ) : (
                       <span className="text-2xl sm:text-3xl font-bold text-white">
-                        {getInitials(profileData.nickname || 'U')}
+                        {getInitials(user?.nickname || 'U')}
                       </span>
                     )}
                   </div>

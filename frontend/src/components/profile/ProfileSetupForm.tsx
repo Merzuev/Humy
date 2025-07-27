@@ -98,12 +98,15 @@ export function ProfileSetupForm() {
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      setProfileImage(file);
+      setProfileImage(file); // для отправки
       const reader = new FileReader();
-      reader.onload = (e) => setPreviewUrl(e.target?.result as string);
+      reader.onloadend = () => {
+        setPreviewUrl(reader.result as string); // для показа
+      };
       reader.readAsDataURL(file);
     }
   };
+
 
   const formatBirthDate = (value: string) => {
     const digits = value.replace(/\D/g, '');
@@ -177,9 +180,10 @@ export function ProfileSetupForm() {
       formData.append('interface_language', registrationData.interface_language || i18n.language);
       formData.append('theme', 'Светлая');
 
-      if (data.avatar && data.avatar[0]) {
-        formData.append('avatar', data.avatar[0]);
+      if (profileImage) {
+        formData.append('avatar', profileImage);
       }
+
 
       const identifierField = registrationData.inputType === 'phone' ? 'phone' : 'email';
       formData.append(identifierField, registrationData.identifier);
@@ -187,7 +191,12 @@ export function ProfileSetupForm() {
       formData.append('password2', registrationData.password);
 
       // 1. Регистрируем пользователя
-      await apiClient.post('/api/register/', formData);
+      await apiClient.post('/api/register/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
 
       // 2. Получаем токены через /auth/jwt/create/
       const loginResponse = await apiClient.post('/auth/jwt/create/', {
@@ -263,12 +272,13 @@ export function ProfileSetupForm() {
             <div className="flex flex-col items-center space-y-4">
               <div className="relative">
                 <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gray-700 border-2 border-gray-600 flex items-center justify-center overflow-hidden">
-                  {profileImage ? (
-                    <img src={profileImage} alt="Profile" className="w-full h-full object-cover" />
+                  {previewUrl ? (
+                    <img src={previewUrl} alt="Profile" className="w-full h-full object-cover" />
                   ) : (
                     <User className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400" />
                   )}
                 </div>
+
                 <label className="absolute -bottom-1 -right-1 sm:-bottom-2 sm:-right-2 w-6 h-6 sm:w-8 sm:h-8 bg-indigo-600 rounded-full flex items-center justify-center cursor-pointer hover:bg-indigo-700 transition-colors">
                   <Camera className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
                   <input
