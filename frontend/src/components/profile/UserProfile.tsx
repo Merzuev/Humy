@@ -25,7 +25,8 @@ import {
 } from '../../data/locations';
 import apiClient from '../../api/instance';
 import { useUser } from '../../contexts/UserContext';
-import axios from 'axios';
+import { toast } from 'react-toastify';
+
 
 interface UserProfileData {
   nickname: string;
@@ -37,6 +38,9 @@ interface UserProfileData {
   profileImage?: string;
   email?: string;
   phone?: string;
+  avatar?: File;
+  interface_language?: string;
+  theme?: string;
 }
 
 interface UserProfileProps {
@@ -87,6 +91,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [initialData, setInitialData] = useState<ProfileData | null>(null);
 
   const [profileData, setProfileData] = useState<UserProfileData>({
     nickname: '',
@@ -100,6 +105,8 @@ export function UserProfile({ onBack }: UserProfileProps) {
   });
 
   const [editData, setEditData] = useState<UserProfileData>(profileData);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+
 
   // Load user profile on component mount
   useEffect(() => {
@@ -124,17 +131,25 @@ export function UserProfile({ onBack }: UserProfileProps) {
         birthDate,
         country: userData.country || '',
         city: userData.city || '',
-        languages: userData.languages || [],
-        interests: userData.interests || [],
+        languages: Array.isArray(userData.languages)
+          ? userData.languages
+          : JSON.parse(userData.languages || '[]'),
+        interests: Array.isArray(userData.interests)
+          ? userData.interests
+          : JSON.parse(userData.interests || '[]'),
         profileImage: userData.avatar,
         email: userData.email || '',
-        phone: userData.phone || ''
+        phone: userData.phone || '',
+        interface_language: userData.interface_language || 'en',
+        theme: userData.theme || 'dark',
       };
+
       
       setProfileData(profileData);
       setEditData(profileData);
       setProfileImage(userData.avatar || null);
-      
+      setInitialData(profileData);
+
       // Update user context
       setUser(userData);
     } catch (err: any) {
@@ -147,66 +162,81 @@ export function UserProfile({ onBack }: UserProfileProps) {
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const imageUrl = e.target?.result as string;
-        setProfileImage(imageUrl);
-        setEditData(prev => ({ ...prev, profileImage: imageUrl }));
-      };
-      reader.readAsDataURL(file);
+      const imageUrl = URL.createObjectURL(file); // Только для отображения
+      setProfileImage(imageUrl); // для предпросмотра
+      setAvatarFile(file); // это то, что пойдёт в FormData
     }
   };
+
+
+
 
   const handleSave = async () => {
-    setIsLoading(true);
-    setError(null);
+    if (!initialData) {
+      console.error('Initial data not loaded');
+      return;
+    }
+
+    const formData = new FormData();
+
+    // --- НАЧАЛО ИЗМЕНЕНИЙ ---
+    // Отправляем все поля из editData, а не только измененные.
+
+    // 1. Простые текстовые поля
+    formData.append('nickname', editData.nickname);
+    formData.append('country', editData.country);
+    formData.append('city', editData.city);
+    formData.append('interface_language', editData.interface_language || 'en'); // Добавляем значение по умолчанию на случай, если его нет
+    formData.append('theme', editData.theme || 'dark'); // Добавляем значение по умолчанию
+
+    // 2. Дата рождения
+    if (editData.birthDate) {
+      const [day, month, year] = editData.birthDate.split('.');
+      if (day && month && year) {
+        formData.append('birth_date', `${year}-${month}-${day}`);
+      }
+    }
+
+    // 3. Аватар (только если выбран новый)
+    if (avatarFile) {
+      formData.append('avatar', avatarFile);
+    }
+
+    // 4. Интересы (отправляем всегда)
+    const safeInterests = Array.isArray(editData.interests) ? editData.interests : [];
+    // Если массив пуст, бэкенд ожидает ключ с пустым значением, чтобы очистить список
+    if (safeInterests.length === 0) {
+      formData.append('interests', '');
+    } else {
+      safeInterests.forEach(interest => {
+        formData.append('interests', interest);
+      });
+    }
+    
+    // 5. Языки (отправляем всегда)
+    const safeLangs = Array.isArray(editData.languages) ? editData.languages : [];
+    // Аналогично для языков
+    if (safeLangs.length === 0) {
+      formData.append('languages', '');
+    } else {
+      safeLangs.forEach(lang => {
+        formData.append('languages', lang);
+      });
+    }
+
+    // --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
     try {
-      const values = editData;
-      const formData = new FormData();
-
-
-      formData.append('nickname', values.nickname);
-      formData.append('birth_date', formattedDate);
-      formData.append('country', values.country);
-      formData.append('city', values.city);
-      formData.append('interface_language', values.interface_language);
-      formData.append('theme', values.theme);
-
-      formData.append('languages', JSON.stringify(values.languages || []));
-      formData.append('interests', JSON.stringify(values.interests || []));
-
-
-      if (values.avatar && values.avatar instanceof File) {
-        formData.append('avatar', values.avatar);
-      }
-      const response = await apiClient.put('/api/profile/', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+      await apiClient.put('/api/profile/', formData, {
       });
-
-      setUser(response.data);
-      setProfileData(response.data);
+      toast.success('Профиль обновлён');
       setIsEditing(false);
+      loadUserProfile(); 
     } catch (err: any) {
-      if (err.response?.data) {
-        console.error("Ошибка при сохранении профиля:", err.response.data);
-        setError(
-          typeof err.response.data === 'string'
-            ? err.response.data
-            : JSON.stringify(err.response.data, null, 2)
-        );
-      } else {
-        console.error("Неизвестная ошибка:", err);
-        setError("Произошла неизвестная ошибка при сохранении профиля.");
-      }
-    } finally {
-      setIsLoading(false);
+      console.error('Ошибка при сохранении профиля:', err.response?.data || err.message);
+      toast.error('Ошибка при сохранении');
     }
   };
-
-
 
   const handleCancel = () => {
     setEditData(profileData);
@@ -401,7 +431,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
               )}
 
               {/* Content Grid */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
+              <div className="relative z-20 grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
                 {/* Basic Information */}
                 <div className="bg-white/5 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/20 p-4 sm:p-6 hover:bg-white/10 transition-all duration-300">
                   <h3 className="text-lg sm:text-xl font-semibold text-white mb-4 sm:mb-6 flex items-center">
@@ -488,7 +518,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
                   
                   <div className="space-y-3 sm:space-y-4">
                     {/* Country */}
-                    <div>
+                    <div className="relative z-50">
                       <label className="block text-xs sm:text-sm font-medium text-gray-300 mb-2">
                         {t('profile.country', 'Country')}
                       </label>
@@ -509,7 +539,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
                     </div>
 
                     {/* City */}
-                    <div>
+                    <div className="relative z-40">
                       <label className="block text-xs sm:text-sm font-medium text-gray-300 mb-2">
                         {t('profile.city', 'City')}
                       </label>
@@ -534,7 +564,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
               </div>
 
               {/* Languages Section */}
-              <div className="mt-6 sm:mt-8 bg-white/5 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/20 p-4 sm:p-6 hover:bg-white/10 transition-all duration-300">
+              <div className="relative z-10 mt-6 sm:mt-8 bg-white/5 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/20 p-4 sm:p-6 hover:bg-white/10 transition-all duration-300">
                 <h3 className="text-lg sm:text-xl font-semibold text-white mb-4 sm:mb-6 flex items-center">
                   <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-purple-500 to-pink-600 rounded-lg flex items-center justify-center mr-2 sm:mr-3">
                     <Languages className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
@@ -577,7 +607,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
               </div>
 
               {/* Interests Section */}
-              <div className="mt-6 sm:mt-8 bg-white/5 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/20 p-4 sm:p-6 hover:bg-white/10 transition-all duration-300">
+              <div className="relative z-10 mt-6 sm:mt-8 bg-white/5 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/20 p-4 sm:p-6 hover:bg-white/10 transition-all duration-300">
                 <h3 className="text-lg sm:text-xl font-semibold text-white mb-4 sm:mb-6 flex items-center">
                   <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-pink-500 to-rose-600 rounded-lg flex items-center justify-center mr-2 sm:mr-3">
                     <Heart className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
@@ -587,8 +617,8 @@ export function UserProfile({ onBack }: UserProfileProps) {
                     {(isEditing ? editData.interests : profileData.interests).length}
                   </span>
                 </h3>
-                
-                <div className="flex flex-wrap gap-2 sm:gap-3">
+
+                <div className="flex flex-wrap gap-2 sm:gap-3 mb-4">
                   {(isEditing ? editData.interests : profileData.interests).map((interestKey) => (
                     <span
                       key={interestKey}
@@ -607,7 +637,30 @@ export function UserProfile({ onBack }: UserProfileProps) {
                     </span>
                   ))}
                 </div>
+
+                {isEditing && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
+                    {getTranslatedInterests(i18n.language)
+                      .filter((interest) => !editData.interests.includes(interest.value))
+                      .map((interest) => (
+                        <button
+                          key={interest.value}
+                          type="button"
+                          onClick={() =>
+                            setEditData((prev) => ({
+                              ...prev,
+                              interests: [...prev.interests, interest.value],
+                            }))
+                          }
+                          className="p-2 sm:p-3 rounded-lg text-xs sm:text-sm font-medium bg-white/10 text-gray-300 hover:bg-white/20 border border-white/20 transition-all duration-200"
+                        >
+                          {interest.label}
+                        </button>
+                      ))}
+                  </div>
+                )}
               </div>
+
 
               {/* Statistics Section */}
               <div className="mt-6 sm:mt-8 bg-white/5 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/20 p-4 sm:p-6 hover:bg-white/10 transition-all duration-300">
