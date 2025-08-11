@@ -1,64 +1,35 @@
 from rest_framework import serializers
-from .models import Country, Region, City, ChatRoom
-from .models import Message
+from .models import Folder, Chat, Label
 
-#///////ChatRoom///////
-
-class CountrySerializer(serializers.ModelSerializer):
+class LabelSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Country
-        fields = ['id', 'name']
+        model = Label
+        fields = ['id', 'name', 'color']
 
-class RegionSerializer(serializers.ModelSerializer):
-    country = CountrySerializer(read_only=True)
-    country_id = serializers.PrimaryKeyRelatedField(queryset=Country.objects.all(), source='country', write_only=True)
-
-    class Meta:
-        model = Region
-        fields = ['id', 'name', 'country', 'country_id']
-
-class CitySerializer(serializers.ModelSerializer):
-    region = RegionSerializer(read_only=True)
-    region_id = serializers.PrimaryKeyRelatedField(queryset=Region.objects.all(), source='region', write_only=True)
+class ChatSerializer(serializers.ModelSerializer):
+    folders = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=Folder.objects.all()
+    )
+    labels = LabelSerializer(many=True, read_only=True)
 
     class Meta:
-        model = City
-        fields = ['id', 'name', 'region', 'region_id']
+        model = Chat
+        fields = ['id', 'name', 'folders', 'labels', 'is_protected', 'created_at']
 
-class ChatRoomSerializer(serializers.ModelSerializer):
-    cities = CitySerializer(many=True, read_only=True)
-    city_ids = serializers.PrimaryKeyRelatedField(queryset=City.objects.all(), source='cities', many=True, write_only=True)
-    creator = serializers.StringRelatedField(read_only=True)
-
-    class Meta:
-        model = ChatRoom
-        fields = ['id', 'name', 'description', 'is_private', 'cities', 'city_ids', 'creator']
-
-class ChatRoomCreateSerializer(serializers.ModelSerializer):
-    city_ids = serializers.PrimaryKeyRelatedField(
-        queryset=City.objects.all(), source='cities', many=True, write_only=True
+class FolderSerializer(serializers.ModelSerializer):
+    children = serializers.SerializerMethodField()
+    chats = serializers.SerializerMethodField()
+    labels = LabelSerializer(many=True, read_only=True)
+    parent = serializers.PrimaryKeyRelatedField(
+        queryset=Folder.objects.all(), allow_null=True, required=False
     )
 
     class Meta:
-        model = ChatRoom
-        fields = ['name', 'description', 'is_private', 'city_ids']
+        model = Folder
+        fields = ['id', 'name', 'parent', 'created_at', 'labels', 'children', 'chats']
 
-    def create(self, validated_data):
-        cities = validated_data.pop('cities')
-        chat = ChatRoom.objects.create(**validated_data)
-        chat.cities.set(cities)
-        return chat
-    
-#//////Message///////
+    def get_children(self, obj):
+        return FolderSerializer(obj.children.all(), many=True).data
 
-class MessageSerializer(serializers.ModelSerializer):
-    sender = serializers.StringRelatedField(read_only=True)  # Можно заменить на ID, если надо
-    class Meta:
-        model = Message
-        fields = ['id', 'chat', 'sender', 'text', 'created_at', 'edited', 'deleted']
-        read_only_fields = ['sender', 'created_at', 'edited', 'deleted']
-
-class MessageUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Message
-        fields = ['text']
+    def get_chats(self, obj):
+        return ChatSerializer(obj.chats.all(), many=True).data

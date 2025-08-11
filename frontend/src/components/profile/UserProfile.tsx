@@ -16,7 +16,7 @@ import {
   Sparkles,
   ArrowLeft
 } from 'lucide-react';
-import { Button, Input, Select, SearchableSelect } from '../ui';
+import { Button, Input, SearchableSelect } from '../ui';
 import { 
   getCountryOptions, 
   getCitiesForCountry, 
@@ -26,9 +26,12 @@ import {
 import apiClient from '../../api/instance';
 import { useUser } from '../../contexts/UserContext';
 import { toast } from 'react-toastify';
+import axios from 'axios';
 
 
-interface UserProfileData {
+
+
+interface ProfileData {
   nickname: string;
   birthDate: string;
   country: string;
@@ -87,13 +90,13 @@ export function UserProfile({ onBack }: UserProfileProps) {
   const { t, i18n } = useTranslation();
   const { user, setUser, token } = useUser();
   const [isEditing, setIsEditing] = useState(false);
-  const [profileImage, setProfileImage] = useState<string | null>(null);
+  const [, setProfileImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initialData, setInitialData] = useState<ProfileData | null>(null);
 
-  const [profileData, setProfileData] = useState<UserProfileData>({
+  const [profileData, setProfileData] = useState<ProfileData>({
     nickname: '',
     birthDate: '',
     country: '',
@@ -104,7 +107,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
     phone: ''
   });
 
-  const [editData, setEditData] = useState<UserProfileData>(profileData);
+  const [editData, setEditData] = useState<ProfileData>(profileData);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
 
 
@@ -126,7 +129,7 @@ export function UserProfile({ onBack }: UserProfileProps) {
         ? new Date(userData.birth_date).toLocaleDateString('en-GB')
         : '';
       
-      const profileData: UserProfileData = {
+      const profileData: ProfileData = {
         nickname: userData.nickname || '',
         birthDate,
         country: userData.country || '',
@@ -169,8 +172,6 @@ export function UserProfile({ onBack }: UserProfileProps) {
   };
 
 
-
-
   const handleSave = async () => {
     if (!initialData) {
       console.error('Initial data not loaded');
@@ -179,17 +180,14 @@ export function UserProfile({ onBack }: UserProfileProps) {
 
     const formData = new FormData();
 
-    // --- НАЧАЛО ИЗМЕНЕНИЙ ---
-    // Отправляем все поля из editData, а не только измененные.
-
-    // 1. Простые текстовые поля
+    // Текстовые поля
     formData.append('nickname', editData.nickname);
     formData.append('country', editData.country);
     formData.append('city', editData.city);
-    formData.append('interface_language', editData.interface_language || 'en'); // Добавляем значение по умолчанию на случай, если его нет
-    formData.append('theme', editData.theme || 'dark'); // Добавляем значение по умолчанию
+    formData.append('interface_language', editData.interface_language || 'en');
+    formData.append('theme', editData.theme || 'dark');
 
-    // 2. Дата рождения
+    // Дата рождения
     if (editData.birthDate) {
       const [day, month, year] = editData.birthDate.split('.');
       if (day && month && year) {
@@ -197,46 +195,77 @@ export function UserProfile({ onBack }: UserProfileProps) {
       }
     }
 
-    // 3. Аватар (только если выбран новый)
+    // Аватар
     if (avatarFile) {
       formData.append('avatar', avatarFile);
     }
 
-    // 4. Интересы (отправляем всегда)
+    // Интересы и языки — только если изменились
+    const oldInterests = profileData.interests || [];
+    const oldLangs = profileData.languages || [];
+
     const safeInterests = Array.isArray(editData.interests) ? editData.interests : [];
-    // Если массив пуст, бэкенд ожидает ключ с пустым значением, чтобы очистить список
-    if (safeInterests.length === 0) {
-      formData.append('interests', '');
-    } else {
-      safeInterests.forEach(interest => {
-        formData.append('interests', interest);
-      });
-    }
-    
-    // 5. Языки (отправляем всегда)
     const safeLangs = Array.isArray(editData.languages) ? editData.languages : [];
-    // Аналогично для языков
-    if (safeLangs.length === 0) {
-      formData.append('languages', '');
-    } else {
-      safeLangs.forEach(lang => {
-        formData.append('languages', lang);
-      });
+
+    // Удаляем пустые, не-строки, длинные значения из языков
+    const cleanLangs = safeLangs
+      .filter(l => typeof l === 'string')
+      .map(l => l.trim())
+      .filter(l => l !== '' && l.length <= 5);
+
+    const cleanInterests = safeInterests
+      .filter(i => typeof i === 'string')
+      .map(i => i.trim())
+      .filter(i => i !== '' && i.length <= 30);
+
+    const interestsChanged =
+      JSON.stringify([...oldInterests].sort()) !== JSON.stringify([...cleanInterests].sort());
+
+    const langsChanged =
+      JSON.stringify([...oldLangs].sort()) !== JSON.stringify([...cleanLangs].sort());
+
+    if (interestsChanged) {
+      formData.append('interests', JSON.stringify(cleanInterests));
     }
 
-    // --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    if (langsChanged) {
+      formData.append('languages', JSON.stringify(cleanLangs));
+    }
 
     try {
-      await apiClient.put('/api/profile/', formData, {
+      const response = await apiClient.put('/api/profile/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
       });
-      toast.success('Профиль обновлён');
+
+      const updatedProfile = response.data;
+
+      // Обновляем глобальный контекст и локальный стейт
+      setUser(updatedProfile);
+      setProfileData(formatProfileData(updatedProfile));
       setIsEditing(false);
-      loadUserProfile(); 
-    } catch (err: any) {
-      console.error('Ошибка при сохранении профиля:', err.response?.data || err.message);
-      toast.error('Ошибка при сохранении');
+      toast.success('Профиль успешно обновлён');
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        const responseData = error.response.data;
+
+        // Покажем, если ошибка в поле avatar
+        if (responseData.avatar && Array.isArray(responseData.avatar)) {
+          console.error('❌ ОШИБКА АВАТАРА:', responseData.avatar[0]);
+          alert('❌ ОШИБКА АВАТАРА:\n' + responseData.avatar[0]);
+        } else {
+          console.error('Ошибка при сохранении профиля:', responseData);
+          alert('Ошибка:\n' + JSON.stringify(responseData, null, 2));
+        }
+      } else {
+        console.error('Ошибка при сохранении профиля:', error);
+      }
+
+      toast.error('Ошибка при сохранении профиля');
     }
   };
+
 
   const handleCancel = () => {
     setEditData(profileData);
@@ -290,20 +319,53 @@ export function UserProfile({ onBack }: UserProfileProps) {
     return LANGUAGES.find(lang => lang.value === langCode)?.label || langCode;
   };
 
-  const calculateAge = (birthDate: string) => {
-    if (!birthDate) return '';
-    const [day, month, year] = birthDate.split('.').map(Number);
+  const calculateAge = (birthDate: string | undefined | null) => {
+    if (!birthDate || typeof birthDate !== 'string') return '';
+
+    // Поддержка двух форматов: ДД.ММ.ГГГГ и ГГГГ-ММ-ДД
+    let day: number, month: number, year: number;
+    if (birthDate.includes('.')) {
+      const [d, m, y] = birthDate.split('.');
+      day = Number(d);
+      month = Number(m);
+      year = Number(y);
+    } else if (birthDate.includes('-')) {
+      const [y, m, d] = birthDate.split('-');
+      day = Number(d);
+      month = Number(m);
+      year = Number(y);
+    } else {
+      return '';
+    }
+    if (isNaN(day) || isNaN(month) || isNaN(year)) return '';
     const birth = new Date(year, month - 1, day);
+    if (isNaN(birth.getTime())) return '';
     const today = new Date();
     let age = today.getFullYear() - birth.getFullYear();
-    const monthDiff = today.getMonth() - birth.getMonth();
-    
-    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+    if (
+      today.getMonth() < birth.getMonth() ||
+      (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())
+    ) {
       age--;
     }
-    
-    return age;
+    return age > 0 ? age : '';
   };
+
+
+
+  const formatProfileData = (userData: any): ProfileData => {
+    const profileData = { ...userData };
+
+    if (userData.birth_date) {
+      const [y, m, d] = userData.birth_date.split('-'); // "2025-08-04"
+      profileData.birthDate = `${d}.${m}.${y}`; // "04.08.2025"
+    } else {
+      profileData.birthDate = '';
+    }
+
+    return profileData;
+  };
+
 
   if (isLoading) {
     return (
@@ -673,19 +735,19 @@ export function UserProfile({ onBack }: UserProfileProps) {
                 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
                   <div className="text-center p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20 hover:bg-white/10 transition-all duration-200">
-                    <div className="text-2xl sm:text-3xl font-bold text-indigo-400 mb-1 sm:mb-2">127</div>
+                    <div className="text-2xl sm:text-3xl font-bold text-indigo-400 mb-1 sm:mb-2">0</div>
                     <div className="text-xs sm:text-sm text-gray-300 font-medium">{t('profile.friends', 'Friends')}</div>
                   </div>
                   <div className="text-center p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20 hover:bg-white/10 transition-all duration-200">
-                    <div className="text-2xl sm:text-3xl font-bold text-purple-400 mb-1 sm:mb-2">23</div>
+                    <div className="text-2xl sm:text-3xl font-bold text-purple-400 mb-1 sm:mb-2">0</div>
                     <div className="text-xs sm:text-sm text-gray-300 font-medium">{t('profile.chats', 'Chats')}</div>
                   </div>
                   <div className="text-center p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20 hover:bg-white/10 transition-all duration-200">
-                    <div className="text-2xl sm:text-3xl font-bold text-green-400 mb-1 sm:mb-2">1.2K</div>
+                    <div className="text-2xl sm:text-3xl font-bold text-green-400 mb-1 sm:mb-2">0</div>
                     <div className="text-xs sm:text-sm text-gray-300 font-medium">{t('profile.messages', 'Messages')}</div>
                   </div>
                   <div className="text-center p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20 hover:bg-white/10 transition-all duration-200">
-                    <div className="text-2xl sm:text-3xl font-bold text-yellow-400 mb-1 sm:mb-2">89</div>
+                    <div className="text-2xl sm:text-3xl font-bold text-yellow-400 mb-1 sm:mb-2">0</div>
                     <div className="text-xs sm:text-sm text-gray-300 font-medium">{t('profile.days', 'Days')}</div>
                   </div>
                 </div>

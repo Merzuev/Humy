@@ -1,24 +1,24 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from PIL import Image, UnidentifiedImageError
+from io import BytesIO
 import json
+from django.core.files.uploadedfile import InMemoryUploadedFile
+
+
+# Поддержка HEIC (iPhone)
+from pillow_heif import register_heif_opener
+register_heif_opener()
 
 User = get_user_model()
 
 
-# Функция валидации изображения
-def validate_image_extension(image):
-    valid_mime_types = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
-    if image.content_type not in valid_mime_types:
-        raise ValidationError('Неподдерживаемый формат изображения. Разрешены: JPG, PNG, WEBP, GIF.')
-    return image
-
-
+# ✅ Регистрация пользователя
 class RegisterSerializer(serializers.ModelSerializer):
     nickname = serializers.CharField(required=True)
     country = serializers.CharField(required=True)
     city = serializers.CharField(required=True)
-    avatar = serializers.ImageField(required=False, allow_null=True, validators=[validate_image_extension])
+    avatar = serializers.ImageField(required=False, allow_null=True)
     interests = serializers.JSONField(required=False)
     languages = serializers.JSONField(required=False)
     phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -70,8 +70,13 @@ class RegisterSerializer(serializers.ModelSerializer):
         return user
 
 
+# ✅ Профиль пользователя
 class ProfileSerializer(serializers.ModelSerializer):
-    avatar = serializers.ImageField(required=False, allow_null=True, use_url=True, validators=[validate_image_extension])
+    avatar = serializers.ImageField(
+        required=False,
+        allow_null=True,
+        use_url=True
+    )
 
     class Meta:
         model = User
@@ -91,34 +96,48 @@ class ProfileSerializer(serializers.ModelSerializer):
             'interface_language',
         ]
         read_only_fields = ['email']
+    
+    
 
-    def to_internal_value(self, data):
-        data = data.copy()
+    def validate_avatar(self, avatar):
+        if not avatar:
+            return avatar
 
-        for field in ['languages', 'interests']:
-            value = data.get(field)
-            if isinstance(value, str):
-                try:
-                    data[field] = json.loads(value)
-                except json.JSONDecodeError:
-                    raise serializers.ValidationError({
-                        field: 'Неверный формат. Ожидался список (array).'
-                    })
+        try:
+            image = Image.open(avatar)
 
-        return super().to_internal_value(data)
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+
+            buffer = BytesIO()
+            image.save(buffer, format='JPEG', quality=85)
+            buffer.seek(0)
+
+            new_name = avatar.name.rsplit('.', 1)[0] + '.jpg'
+
+            return InMemoryUploadedFile(
+                file=buffer,
+                field_name='avatar',
+                name=new_name,
+                content_type='image/jpeg',
+                size=buffer.getbuffer().nbytes,
+                charset=None
+            )
+
+        except UnidentifiedImageError:
+            raise serializers.ValidationError(
+                'Не удалось распознать файл как изображение. '
+                'Пожалуйста, используйте форматы: JPG, PNG, GIF, HEIC.'
+            )
+        except Exception as e:
+            raise serializers.ValidationError(f'Ошибка при обработке изображения: {str(e)}')
 
     def update(self, instance, validated_data):
-        for field in ['languages', 'interests']:
-            value = validated_data.get(field)
-            if isinstance(value, str):
-                try:
-                    validated_data[field] = json.loads(value)
-                except json.JSONDecodeError:
-                    validated_data[field] = []
-
-        # Если аватар отсутствует (удаление), не заменяем None, просто пропускаем
-        avatar = validated_data.get('avatar', None)
-        if avatar is None and 'avatar' in validated_data:
-            validated_data.pop('avatar', None)
+        """
+        Обновляет данные профиля, корректно обрабатывая удаление аватара.
+        """
+        if 'avatar' in validated_data and validated_data['avatar'] is None:
+            if instance.avatar:
+                instance.avatar.delete(save=False)
 
         return super().update(instance, validated_data)
