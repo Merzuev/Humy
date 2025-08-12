@@ -1,19 +1,17 @@
-# backend/config/asgi.py
 import os
 import django
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
-from chat.routing import websocket_urlpatterns
-from chat.auth import JWTAuthMiddleware  # наш middleware
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
-django_asgi_app = get_asgi_application()
+print(f"[WS][IMPORT] config.asgi loaded")
+
+from chat.middleware import JwtAuthMiddleware  # noqa: E402
+import chat.routing  # noqa: E402
 
 application = ProtocolTypeRouter({
-    "http": django_asgi_app,
-    "websocket": JWTAuthMiddleware(
-        URLRouter(websocket_urlpatterns)
-    ),
+    "http": get_asgi_application(),
+    "websocket": JwtAuthMiddleware(URLRouter(chat.routing.websocket_urlpatterns)),
 })

@@ -4,6 +4,8 @@ import { ArrowLeft, Send, Smile, Paperclip, MoreVertical, Loader2, Info } from '
 import apiClient from '../../api/instance';
 import { useUser } from '../../contexts/UserContext';
 
+/* ================= типы ================= */
+
 interface Message {
   id: string;
   user_id: string | null;
@@ -29,7 +31,12 @@ interface ChatInterfaceProps {
 /* ================= helpers ================= */
 
 const getInitials = (name: string) =>
-  name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() || '').join('');
+  name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() || '')
+    .join('');
 
 const extractCursor = (url?: string | null): string | null => {
   if (!url) return null;
@@ -46,9 +53,7 @@ const extractCursor = (url?: string | null): string | null => {
 function getWsToken(): string {
   // a) из заголовка axios (Authorization: Bearer <token> / JWT <token>)
   const headersAny: any = (apiClient as any).defaults?.headers;
-  const authHeader: string | undefined =
-    headersAny?.common?.Authorization || headersAny?.Authorization;
-
+  const authHeader: string | undefined = headersAny?.common?.Authorization || headersAny?.Authorization;
   if (authHeader) {
     const low = authHeader.toLowerCase();
     if (low.startsWith('bearer ') || low.startsWith('jwt ')) {
@@ -60,7 +65,7 @@ function getWsToken(): string {
   const keys = ['access', 'access_token', 'jwt', 'token', 'jwt_access', 'auth_token'];
   for (const k of keys) {
     const v = localStorage.getItem(k) || sessionStorage.getItem(k);
-    if (v) return v.replace(/^"|"$/g, '');
+    if (v) return v.replace(/^"|"$/g, ''); // уберём кавычки, если лежит строкой
   }
 
   // c) из cookies
@@ -69,6 +74,26 @@ function getWsToken(): string {
 
   return '';
 }
+
+/** Нормализуем полезную нагрузку WS (поддержка snake/camel + обёртка data) */
+function normalizeWsPayload(raw: any) {
+  const d = raw?.data ?? raw ?? {};
+  const type = raw?.type ?? d?.type;
+
+  const id = String(d.id ?? d.messageId ?? '');
+  const displayName = d.display_name ?? d.displayName ?? d.username ?? 'User';
+  const content = d.content ?? '';
+  const createdAt = d.created_at ?? d.createdAt ?? new Date().toISOString();
+
+  const authorId = d.author ?? d.authorId ?? d.author_id ?? null;
+
+  const count = d.count ?? raw?.count;
+  const isTyping = d.isTyping ?? raw?.isTyping;
+
+  return { type, id, displayName, content, createdAt, authorId, count, isTyping };
+}
+
+/* ================= сообщение ================= */
 
 const MessageItem = memo(({ m, formatTime }: { m: Message; formatTime: (ts: string) => string }) => (
   <div className={`flex ${m.is_own ? 'justify-end' : 'justify-start'} mb-2`}>
@@ -98,7 +123,7 @@ const MessageItem = memo(({ m, formatTime }: { m: Message; formatTime: (ts: stri
 ));
 MessageItem.displayName = 'MessageItem';
 
-/* ================= component ================= */
+/* ================= основной компонент ================= */
 
 export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => {
   const { t } = useTranslation();
@@ -130,7 +155,7 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
   const listRef = useRef<HTMLDivElement>(null);
 
   const myDisplayName = useMemo(
-    () => (user?.username || (user as any)?.display_name || 'Humy').toString().slice(0, 32),
+    () => (user?.nickname || (user as any)?.display_name || user?.username || user?.email || 'Humy').toString().slice(0, 32),
     [user]
   );
 
@@ -143,18 +168,28 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
     }
   }, []);
 
-  const transform = useCallback((arr: any[]): Message[] => {
-    const meId = user?.id ? String(user.id) : null;
-    const list: Message[] = arr.map((msg: any) => ({
-      id: String(msg.id),
-      user_id: msg.author !== undefined && msg.author !== null ? String(msg.author) : null,
-      username: msg.display_name || 'User',
-      content: msg.content || '',
-      timestamp: msg.created_at || new Date().toISOString(),
-      is_own: meId !== null && String(msg.author) === meId,
-    }));
-    return list.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  }, [user?.id]);
+  const transform = useCallback(
+    (arr: any[]): Message[] => {
+      const meId = user?.id ? String(user.id) : null;
+      const list: Message[] = arr.map((msg: any) => ({
+        id: String(msg.id),
+        user_id:
+          msg.author !== undefined && msg.author !== null
+            ? String(msg.author)
+            : msg.author_id !== undefined && msg.author_id !== null
+            ? String(msg.author_id)
+            : null,
+        username: msg.display_name || msg.displayName || 'User',
+        content: msg.content || '',
+        timestamp: msg.created_at || msg.createdAt || new Date().toISOString(),
+        is_own:
+          meId !== null &&
+          (String(msg.author) === meId || String(msg.author_id) === meId || msg.display_name === myDisplayName),
+      }));
+      return list.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    },
+    [user?.id, myDisplayName]
+  );
 
   /* -------- Первичная загрузка -------- */
   const loadInitial = useCallback(async () => {
@@ -230,18 +265,15 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
   useEffect(() => {
     setWsReady(false);
 
-    const apiBase = (apiClient.defaults.baseURL || 'http://localhost:8000/api/').replace(/\/+$/, '');
-    const apiOrigin = new URL(apiBase, window.location.origin);
-    const wsProto = apiOrigin.protocol === 'https:' ? 'wss' : 'ws';
+    // Жёстко зададим базу WS (или возьмём из .env: VITE_WS_BASE_URL=ws://127.0.0.1:8000)
+    const WS_BASE: string =
+      // @ts-ignore
+      (import.meta as any).env?.VITE_WS_BASE_URL || `ws://${window.location.hostname}:8000`;
 
     const token = getWsToken();
-    if (!token) {
-      console.warn('[CHAT] JWT token not found for WS; connection may be rejected');
-    }
-    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
-    const wsUrl = `${wsProto}://${apiOrigin.host}/ws/chat/${roomInfo.id}/${qs}`;
-    console.debug('[CHAT] WS URL:', wsUrl);
+    const wsUrl = `${WS_BASE}/ws/chat/${roomInfo.id}/?token=${encodeURIComponent(token || '')}`;
 
+    console.debug('[CHAT] WS URL:', wsUrl);
     let retry = 0;
     let closedByClient = false;
 
@@ -253,51 +285,69 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
         retry = 0;
         setWsReady(true);
         setHint(null);
+        console.debug('[CHAT] WS open');
+
+        // ⚡️ Ping — быстро убеждаемся, что receive работает
+        try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
       };
 
       ws.onmessage = (e) => {
+        console.debug('[CHAT] WS message raw:', e.data); // лог всего входящего
         try {
-          const msg = JSON.parse(e.data);
+          const raw = JSON.parse(e.data);
+          const norm = normalizeWsPayload(raw);
 
-          if (msg.type === 'message' && msg.data) {
-            const m = msg.data;
+          if (norm.type === 'message') {
+            const meId = user?.id ? String(user.id) : null;
             const item: Message = {
-              id: String(m.id),
-              user_id: null,
-              username: m.display_name || 'User',
-              content: m.content || '',
-              timestamp: m.created_at || new Date().toISOString(),
-              is_own: m.display_name === myDisplayName,
+              id: String(norm.id || `ws-${Date.now()}`),
+              user_id:
+                norm.authorId !== undefined && norm.authorId !== null ? String(norm.authorId) : null,
+              username: norm.displayName || 'User',
+              content: norm.content || '',
+              timestamp: norm.createdAt || new Date().toISOString(),
+              is_own:
+                (meId !== null && norm.authorId !== undefined && String(norm.authorId) === meId) ||
+                (norm.displayName && norm.displayName === myDisplayName),
             };
             setMessages((prev) => [...prev, item]);
-          } else if (msg.type === 'typing') {
-            setIsTyping(Boolean(msg.data?.isTyping));
+          } else if (norm.type === 'typing') {
+            setIsTyping(Boolean(norm.isTyping));
             setTimeout(() => setIsTyping(false), 1500);
-          } else if (msg.type === 'presence' && msg.data?.count !== undefined) {
-            setParticipantCount(Number(msg.data.count) || 0);
+          } else if (norm.type === 'presence' && norm.count !== undefined) {
+            setParticipantCount(Number(norm.count) || 0);
+          } else if (norm.type === 'pong') {
+            // ok
+          } else if (norm.type === 'error') {
+            setHint('Ошибка подключения: требуется авторизация или доступ запрещён.');
           }
         } catch {
-          // ignore
+          // ignore parse
         }
       };
 
       ws.onclose = (e) => {
         setWsReady(false);
         wsRef.current = null;
+        console.warn(`[CHAT] WS close code=${e.code} reason='${e.reason}' wasClean=${e.wasClean}`);
 
-        // если токен отсутствует или сервер закрыл как Unauthorized — не ретраим
+        // Не ретраим, если нет токена или неавторизован
         if (!closedByClient) {
-          if (!token || e.code === 4401) {
+          if (e.code === 4401 || !token) {
             setHint('Требуется авторизация для подключения к чату.');
             return;
           }
+          // Экспоненциальный бэк-офф
           retry += 1;
           const timeout = Math.min(15000, 500 * Math.pow(2, retry));
           setTimeout(connect, timeout);
         }
       };
 
-      ws.onerror = () => ws.close();
+      ws.onerror = (err) => {
+        console.error('[CHAT] WS error', err);
+        ws.close();
+      };
     };
 
     connect();
@@ -305,15 +355,26 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
       closedByClient = true;
       wsRef.current?.close();
     };
-  }, [roomInfo.id, myDisplayName]);
+  }, [roomInfo.id, myDisplayName, user?.id]);
 
   /* -------- Отправка -------- */
   const handleSend = useCallback(() => {
     const text = message.trim();
+
+    console.debug('[CHAT] try send:', {
+      readyState: wsRef.current?.readyState,
+      hasSocket: !!wsRef.current,
+      textLen: text.length,
+    });
+
     if (!text) return;
 
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setHint(t('chat.wsNotReady', 'Соединение устанавливается, попробуйте ещё раз...'));
+    if (!wsRef.current) {
+      setHint('Нет подключения к сокету. Перезайдите в чат.');
+      return;
+    }
+    if (wsRef.current.readyState !== WebSocket.OPEN) {
+      setHint('Соединение устанавливается, попробуйте ещё раз…');
       return;
     }
 
@@ -331,22 +392,21 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
     setMessages((prev) => [...prev, optimistic]);
 
     try {
-      wsRef.current.send(JSON.stringify({
-        type: 'message',
-        content: text,
-        displayName: myDisplayName,
-      }));
+      const payload = { type: 'message', content: text, displayName: myDisplayName };
+      wsRef.current.send(JSON.stringify(payload));
+      console.debug('[CHAT] sent payload:', payload);
+
       setMessage('');
       requestAnimationFrame(() => inputRef.current?.focus());
       requestAnimationFrame(() => lastRef.current?.scrollIntoView({ behavior: 'smooth' }));
       setHint(null);
     } catch {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setHint(t('chat.sendFailed', 'Не удалось отправить сообщение'));
+      setHint('Не удалось отправить сообщение');
     } finally {
       setIsSending(false);
     }
-  }, [message, myDisplayName, t, user?.id]);
+  }, [message, myDisplayName, user?.id]);
 
   /* -------- Typing -------- */
   const typingTimeout = useRef<number | null>(null);
@@ -396,7 +456,7 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
               onClick={loadInitial}
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
             >
-              {t('common.retry', 'Повторить')}
+              Повторить
             </button>
           </div>
         </div>
@@ -417,8 +477,9 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
               {roomInfo.country} - {roomInfo.city}
             </h2>
             <p className="text-xs sm:text-sm text-gray-200 truncate">
-              {roomInfo.interest} • {participantCount} {t('dashboard.participants', 'участников')}
-              {!wsReady && <span className="ml-2 text-[11px] text-indigo-200">{t('chat.connecting', 'Подключение…')}</span>}
+              {roomInfo.interest} • {participantCount} участников
+              {!wsReady && <span className="ml-2 text-[11px] text-indigo-200">Подключение…</span>}
+              {isTyping && <span className="ml-2 text-[11px] text-indigo-200">Печатает…</span>}
             </p>
           </div>
         </div>
@@ -428,27 +489,24 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
       </div>
 
       {/* Messages */}
-      <div
-        ref={listRef}
-        className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 custom-scrollbar"
-      >
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 custom-scrollbar">
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-6 h-6 text-indigo-400 animate-spin mr-3" />
-            <span className="text-gray-300">{t('common.loading', 'Загрузка...')}</span>
+            <span className="text-gray-300">Загрузка...</span>
           </div>
         ) : messages.length > 0 ? (
           <>
-            {isLoadingOlder && (
-              <div className="text-center text-xs text-gray-400 py-1">{t('common.loading', 'Загрузка...')}</div>
-            )}
-            {messages.map((m) => <MessageItem key={m.id} m={m} formatTime={formatTime} />)}
+            {isLoadingOlder && <div className="text-center text-xs text-gray-400 py-1">Загрузка...</div>}
+            {messages.map((m) => (
+              <MessageItem key={m.id} m={m} formatTime={formatTime} />
+            ))}
           </>
         ) : (
           <div className="flex items-center justify-center py-8">
             <div className="text-center">
-              <p className="text-gray-300 mb-2">{t('chat.noMessages', 'Пока сообщений нет')}</p>
-              <p className="text-gray-400 text-sm">{t('chat.sayHello', 'Напишите первое сообщение!')}</p>
+              <p className="text-gray-300 mb-2">Пока сообщений нет</p>
+              <p className="text-gray-400 text-sm">Напишите первое сообщение!</p>
             </div>
           </div>
         )}
@@ -460,11 +518,8 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
         <div className="px-3 sm:px-4 py-2 bg-red-500/10 text-red-300 text-xs flex items-center space-x-2 border-t border-red-500/20">
           <Info className="w-4 h-4" />
           <span className="truncate">{hint}</span>
-          <button
-            className="ml-auto text-indigo-300 hover:text-indigo-200 text-xs underline"
-            onClick={() => setHint(null)}
-          >
-            {t('common.ok', 'Понятно')}
+          <button className="ml-auto text-indigo-300 hover:text-indigo-200 text-xs underline" onClick={() => setHint(null)}>
+            Понятно
           </button>
         </div>
       )}
@@ -483,21 +538,14 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
             ref={inputRef}
             rows={1}
             value={message}
-            onChange={(e) => {
-              const v = e.target.value;
-              setMessage(v);
-              if (!wsReady) return;
-              try {
-                wsRef.current?.send(JSON.stringify({ type: 'typing', user: myDisplayName, isTyping: true }));
-              } catch {}
-            }}
+            onChange={(e) => handleTyping(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 handleSend();
               }
             }}
-            placeholder={wsReady ? t('chat.typeMessage', 'Введите сообщение...') : t('chat.connecting', 'Подключение…')}
+            placeholder={wsReady ? 'Введите сообщение...' : 'Подключение…'}
             className={`w-full resize-none text-white placeholder-gray-400 rounded-xl p-3 focus:outline-none focus:ring-2 ${
               wsReady ? 'bg-white/10 focus:ring-indigo-500/50' : 'bg-white/5 cursor-not-allowed focus:ring-transparent'
             }`}
@@ -509,12 +557,10 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
           onClick={handleSend}
           disabled={isSending || !message.trim() || !wsReady}
           className={`text-white rounded-xl px-3 py-2 transition-colors ${
-            isSending || !message.trim() || !wsReady
-              ? 'bg-indigo-500/40 cursor-not-allowed'
-              : 'bg-indigo-600 hover:bg-indigo-700'
+            isSending || !message.trim() || !wsReady ? 'bg-indigo-500/40 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
           }`}
           aria-label="Отправить"
-          title={!wsReady ? t('chat.connecting', 'Подключение…') : t('chat.send', 'Отправить')}
+          title={!wsReady ? 'Подключение…' : 'Отправить'}
         >
           <Send className="w-4 h-4" />
         </button>
@@ -522,3 +568,5 @@ export const ChatInterface = memo(({ roomInfo, onBack }: ChatInterfaceProps) => 
     </div>
   );
 });
+
+export default ChatInterface;
