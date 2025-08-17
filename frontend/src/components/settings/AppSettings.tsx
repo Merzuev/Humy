@@ -174,7 +174,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       setIsLoading(true);
       setError(null);
       
-      const response = await apiClient.get('/users/settings/');
+      const response = await apiClient.get('api/users/settings/');
       const serverSettings = response.data;
       
       // Transform server settings to match our interface

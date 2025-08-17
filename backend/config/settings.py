@@ -3,17 +3,17 @@ import os
 from pathlib import Path
 from datetime import timedelta
 import environ
+from corsheaders.defaults import default_headers
 
 # ---------------- Base & env ----------------
 env = environ.Env()
 BASE_DIR = Path(__file__).resolve().parent.parent
-environ.Env.read_env(BASE_DIR / ".env")  # .env в корне backend/config/..
+environ.Env.read_env(BASE_DIR / ".env")  # .env в корне backend/ (рядом с config/)
 
 # ---------------- Core Django ----------------
 SECRET_KEY = env("SECRET_KEY")
 DEBUG = env.bool("DEBUG", default=True)
 
-# Хосты (dev): localhost/127.0.0.1/0.0.0.0
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
@@ -22,6 +22,7 @@ ALLOWED_HOSTS = [
 
 # ---------------- Installed apps ----------------
 INSTALLED_APPS = [
+    # Django
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -30,10 +31,10 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
 
     # Third-party
+    "corsheaders",  # <-- оставляем ОДИН раз
     "channels",
     "rest_framework",
     "rest_framework.authtoken",
-    "corsheaders",
     "djoser",
     "rest_framework_simplejwt.token_blacklist",
     "mptt",
@@ -44,28 +45,35 @@ INSTALLED_APPS = [
 ]
 
 # ---------------- Middleware ----------------
+# ВАЖНО: CorsMiddleware должен быть как можно выше, ОБЯЗАТЕЛЬНО перед CommonMiddleware
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  # должен идти максимально высоко
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
+    "corsheaders.middleware.CorsMiddleware",          # ← здесь
+    "django.middleware.common.CommonMiddleware",      # ← после CORS
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# CORS (dev: всё разрешаем)
-CORS_ALLOW_ALL_ORIGINS = True
-# Если захочешь точечно:
-# CORS_ALLOWED_ORIGINS = [
-#     "http://localhost:5173",
-#     "http://127.0.0.1:5173",
-#     "http://localhost:3000",
-#     "http://127.0.0.1:3000",
-# ]
+# ---------------- CORS/CSRF (dev) ----------------
+# В деве лучше явно перечислять источники фронтенда
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+CORS_ALLOW_CREDENTIALS = True  # если используешь куки/сессию; с JWT не обязательно, но не мешает
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "authorization",
+    "content-type",
+]
 
-# Для POST/PUT из фронта в dev (если используешь cookies/формы)
+# Если хочется на время открыть всё (НЕ делай так в проде):
+# CORS_ALLOW_ALL_ORIGINS = True
+
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -90,7 +98,7 @@ TEMPLATES = [
     },
 ]
 
-# WSGI оставляем (админ/скрипты) — веб обслуживает ASGI
+# Веб обслуживает ASGI (Channels), WSGI оставляем для админки/скриптов
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
@@ -124,7 +132,7 @@ USE_TZ = True
 
 # ---------------- Static & Media ----------------
 STATIC_URL = "static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"  # для collectstatic в будущем
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -136,7 +144,6 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    # опционально:
     # "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
 }
 
@@ -146,19 +153,28 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
-    # При необходимости можно явно задать SIGNING_KEY/ALGORITHM
-    # "SIGNING_KEY": SECRET_KEY,
 }
 
-# ---------------- Channels ----------------
-# В DEV обязателен хотя бы InMemory-слой, иначе group_add упадёт.
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
+# ---------------- Channels (Redis + фолбэк InMemory) ----------------
+REDIS_URL = env("REDIS_URL", default="").strip()
+
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL],  # пример: redis://127.0.0.1:6379/0
+            },
+        }
     }
-}
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
 
-# ---------------- Logging (упрощённая диагностика) ----------------
+# ---------------- Logging (диагностика) ----------------
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

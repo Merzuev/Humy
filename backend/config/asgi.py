@@ -1,17 +1,19 @@
+# config/asgi.py
 import os
-import django
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.auth import AuthMiddlewareStack  # авторизация по сессии (cookies)
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-django.setup()
 
-print(f"[WS][IMPORT] config.asgi loaded")
+django_asgi_app = get_asgi_application()
 
-from chat.middleware import JwtAuthMiddleware  # noqa: E402
+# Импорт роутинга после инициализации Django
 import chat.routing  # noqa: E402
 
 application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
-    "websocket": JwtAuthMiddleware(URLRouter(chat.routing.websocket_urlpatterns)),
+    "http": django_asgi_app,
+    "websocket": AuthMiddlewareStack(
+        URLRouter(chat.routing.websocket_urlpatterns)
+    ),
 })
