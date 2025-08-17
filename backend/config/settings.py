@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     # Local apps
     "users",
     "chat",
+    "notifications",  # <-- добавили приложение нотификаций (WS /ws/notifications/)
 ]
 
 # ---------------- Middleware ----------------

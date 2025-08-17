@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -44,7 +44,23 @@ from .services import (
     remove_friend, block_user, unblock_user,
 )
 
+# === уведомления (WS /ws/notifications/) ===
+from notifications.utils import notify_user
+
 User = get_user_model()
+
+
+def _other_participant(chat: Chat, me: User) -> Optional[User]:
+    """
+    Возвращает другого участника приватного чата.
+    Предполагается, что chat.participants — M2M с двумя пользователями.
+    """
+    # prefetch_related("participants") уже используется в get_chat
+    for u in chat.participants.all():
+        if u.id != me.id:
+            return u
+    return None
+
 
 # ======================= FOLDER =======================
 
@@ -317,7 +333,14 @@ class ConversationMessagesView(generics.ListCreateAPIView):
     def list(self, request, *args, **kwargs):
         chat = self.get_chat()
         resp = super().list(request, *args, **kwargs)
+        # помечаем прочитанным и шлём событие собеседнику, чтобы обнулился бейдж
         mark_conversation_read(chat, request.user)
+        try:
+            other = _other_participant(chat, request.user)
+            if other:
+                notify_user(other.id, type="dm_read", chat_id=chat.id)
+        except Exception:
+            pass
         return resp
 
     # --------- ВАЖНО: подставляем room до валидации ---------
@@ -355,7 +378,7 @@ class ConversationMessagesView(generics.ListCreateAPIView):
         chat.save(update_fields=["last_message"])
         inc_unread_for_others(chat, request.user)
 
-        # разошлём по WS в группу chat_<id>
+        # разошлём по WS в группу chat_<id> (чтобы открытый чат получил сообщение)
         try:
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
@@ -365,6 +388,52 @@ class ConversationMessagesView(generics.ListCreateAPIView):
                     "message": MessageSerializer(msg, context={"request": request}).data,
                 },
             )
+        except Exception:
+            pass
+
+        # и индивидуальное уведомление собеседнику для списка диалогов (бейдж/последняя строка)
+        try:
+            other = _other_participant(chat, request.user)
+            if other:
+                # Определяем тип вложения по полям сообщения
+                att_kind = None
+                att_name = getattr(msg, "attachment_name", None) or ""
+                att_type = (getattr(msg, "attachment_type", "") or "").lower()
+                mime = ""
+                if isinstance(getattr(msg, "meta", None), dict):
+                    mime = (msg.meta.get("mime") or "").lower()
+
+                if att_type:
+                    # Модель использует внутренние константы, приведём к фронтовым
+                    if "image" in att_type:
+                        att_kind = "image"
+                    elif "audio" in att_type:
+                        att_kind = "audio"
+                    elif "video" in att_type:
+                        att_kind = "video"
+                    else:
+                        att_kind = "file"
+                elif mime:
+                    if mime.startswith("image/"):
+                        att_kind = "image"
+                    elif mime.startswith("audio/"):
+                        att_kind = "audio"
+                    elif mime.startswith("video/"):
+                        att_kind = "video"
+                    else:
+                        att_kind = "file"
+
+                notify_user(
+                    other.id,
+                    type="dm_badge",
+                    chat_id=chat.id,
+                    last_message=(msg.content or att_name or "Вложение"),
+                    last_message_is_own=False,
+                    last_message_created_at=getattr(msg, "created_at", None),
+                    attachment_kind=att_kind,
+                    attachment_name=att_name or None,
+                    attachment_mime=mime or None,
+                )
         except Exception:
             pass
 
@@ -405,6 +474,21 @@ class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
 
         fr = send_friend_request(request.user, to_user)
         out = FriendRequestSerializer(fr, context={"request": request}).data
+
+        # уведомим адресата через WS /ws/notifications/
+        try:
+            from_name = getattr(request.user, "nickname", None) or request.user.get_username()
+            notify_user(
+                fr.to_user_id,
+                type="friend_request",
+                from_user_id=request.user.id,
+                from_user_name=from_name,
+                request_id=fr.id,
+                created_at=getattr(fr, "created_at", None),
+            )
+        except Exception:
+            pass
+
         return Response(out, status=201)
 
     @action(detail=True, methods=["post"])
@@ -413,6 +497,20 @@ class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
         if fr.to_user_id != request.user.id:
             return Response(status=403)
         accept_friend_request(fr)
+
+        # уведомим автора заявки, что заявка принята
+        try:
+            me_name = getattr(request.user, "nickname", None) or request.user.get_username()
+            notify_user(
+                fr.from_user_id,
+                type="friend_accept",
+                user_id=request.user.id,
+                user_name=me_name,
+                request_id=fr.id,
+            )
+        except Exception:
+            pass
+
         return Response(FriendRequestSerializer(fr, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])
@@ -421,6 +519,7 @@ class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
         if fr.to_user_id != request.user.id:
             return Response(status=403)
         reject_friend_request(fr)
+        # (по желанию можно уведомлять автора об отказе отдельным типом)
         return Response(FriendRequestSerializer(fr, context={"request": request}).data)
 
 
