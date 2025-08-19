@@ -18,6 +18,7 @@ import { AppSettings } from '../settings/AppSettings';
 import { NetworkStatus } from '../common/NetworkStatus';
 import { logger } from '../../utils/logger';
 import { useUser } from '../../contexts/UserContext';
+import apiClient from '../../api/instance';
 
 type ViewMode = 'dashboard' | 'hierarchy' | 'chat' | 'personal-messages' | 'profile' | 'settings';
 
@@ -76,7 +77,7 @@ export function MainDashboard() {
     setIsSidebarOpen(false);
   };
 
-  // назад из Мирового чата — открываем левую панель на том же уровне
+  // назад из Мирового чата — к списку комнат
   const handleBackToHierarchy = () => {
     setCurrentRoom(null);
     setViewMode('hierarchy');
@@ -86,7 +87,7 @@ export function MainDashboard() {
   const handlePersonalMessagesClick = () => {
     setActiveTab('chats');
     setViewMode('personal-messages');
-    setSelectedContact(null);    // список диалогов
+    setSelectedContact(null);    // показываем список диалогов
     setIsSidebarOpen(false);
   };
 
@@ -114,38 +115,32 @@ export function MainDashboard() {
     setIsSidebarOpen(false);
   };
 
-  const messageTemplates = [
-    { content: 'Hey! How are you doing?', isOwn: false },
-    { content: 'Hi! I\'m doing great, thanks for asking. How about you?', isOwn: true },
-    { content: 'I\'m good too! Just finished work. Any plans for the weekend?', isOwn: false },
-    { content: 'Not much planned yet. Maybe we could grab coffee sometime?', isOwn: true },
-    { content: 'That sounds great! I know a nice place downtown.', isOwn: false },
-    { content: 'Perfect! When would be a good time for you?', isOwn: true },
-    { content: 'How about Saturday afternoon around 3 PM?', isOwn: false },
-    { content: 'Saturday at 3 PM works perfectly for me!', isOwn: true },
-    { content: 'Awesome! I\'ll send you the address.', isOwn: false },
-    { content: 'Looking forward to it! See you then.', isOwn: true }
-  ];
-
-  const generateMessagesForContact = (contact: Contact): Message[] => {
-    const num = Math.min(Math.floor(Math.random() * 8) + 3, messageTemplates.length);
-    const selected = messageTemplates.slice(0, num);
-    return selected.map((t, i) => ({
-      id: `${contact.id}-${i}`,
-      senderId: t.isOwn ? 'current' : contact.id,
-      content: t.content,
-      timestamp: new Date(Date.now() - (num - i) * 300000),
-      isOwn: t.isOwn,
-      status: t.isOwn ? (i === num - 1 ? 'delivered' : 'read') : 'read'
-    }));
-  };
-
-  const handleSelectContact = (contact: Contact | null) => {
+  // Выбор контакта: грузим РЕАЛЬНЫЕ сообщения с API
+  const handleSelectContact = async (contact: Contact | null) => {
     setSelectedContact(contact);
     setIsSidebarOpen(false);
     if (contact && !personalMessages[contact.id]) {
-      const newMessages = generateMessagesForContact(contact);
-      setPersonalMessages(prev => ({ ...prev, [contact.id]: newMessages }));
+      try {
+        const resp = await apiClient.get(`api/conversations/${contact.id}/messages/`);
+        const arr = Array.isArray(resp.data) ? resp.data : (resp.data?.results || []);
+        const transformed: Message[] = arr.map((m: any) => {
+          const isOwn = Boolean(
+            m.is_own ?? (m.author?.id && user?.id && Number(m.author.id) === Number(user.id))
+          );
+          return {
+            id: String(m.id ?? m.message_id ?? Math.random()),
+            senderId: isOwn ? 'current' : String(contact.id),
+            content: m.content || m.text || '',
+            timestamp: new Date(m.created_at || m.timestamp || Date.now()),
+            isOwn,
+            status: 'read',
+          };
+        });
+        setPersonalMessages(prev => ({ ...prev, [contact.id]: transformed }));
+      } catch (e) {
+        console.error('Не удалось загрузить сообщения диалога', e);
+        setPersonalMessages(prev => ({ ...prev, [contact.id]: [] }));
+      }
     }
   };
 
@@ -168,9 +163,7 @@ export function MainDashboard() {
   const getCurrentMessages = (): Message[] =>
     selectedContact ? (personalMessages[selectedContact.id] || []) : [];
 
-  // глобальную шапку скрываем:
-  // - в мировом чате, когда открыт конкретный чат
-  // - в личных сообщениях, когда открыт диалог
+  // скрываем верхнюю шапку в экранах с контентом
   const renderHeader = () => {
     const hideHeader =
       (viewMode === 'chat' && currentRoom) ||
@@ -203,9 +196,6 @@ export function MainDashboard() {
     );
   };
 
-  // показываем нижнюю навигацию, ЕСЛИ:
-  //  - НЕ открыт чат мирового чата
-  //  - И (в личных) либо нет выбранного контакта (список), либо вообще не в личных
   const shouldShowBottomNav =
     !currentRoom && !(viewMode === 'personal-messages' && !!selectedContact);
 
@@ -357,11 +347,17 @@ export function MainDashboard() {
       </div>
 
       <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.1); border-radius: 2px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 2px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.5); }
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background-color: rgba(255,255,255,0.2);
+          border-radius: 8px;
+        }
       `}</style>
     </div>
   );
 }
+
+export default MainDashboard;
