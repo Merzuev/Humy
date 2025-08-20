@@ -20,6 +20,8 @@ import {
   EyeOff,
   X,
   CheckCircle2,
+  Play,
+  Pause,
 } from 'lucide-react';
 import apiClient from '../../api/instance';
 import { useUser } from '../../contexts/UserContext';
@@ -47,7 +49,7 @@ type MessageApi = {
   edited_at?: string | null;
   deleted_at?: string | null;
 
-  // ДОБАВЛЕНО: meta (приходит из бэкенда, где мы кладём mime)
+  // meta приходит из бэкенда, где мы кладём mime
   meta?: {
     mime?: string;
     [k: string]: any;
@@ -177,7 +179,7 @@ const pickAuthorId = (msg: any): string | null => {
   }
 };
 
-// !!! ИЗМЕНЕНО: теперь учитываем meta.mime (audio/*|video/*|image/*) прежде, чем смотреть на расширение.
+// Учитываем meta.mime прежде, чем смотреть на расширение
 const guessAttachmentKind = (
   attachmentUrl?: string | null,
   attachmentType?: string | null,
@@ -188,7 +190,6 @@ const guessAttachmentKind = (
   const name = (attachmentName || '').toLowerCase();
   const src = url || name;
 
-  // 1) Если сервер прислал MIME — верим ему.
   if (mime) {
     const m = mime.toLowerCase();
     if (m.startsWith('audio/')) return 'audio';
@@ -196,10 +197,8 @@ const guessAttachmentKind = (
     if (m.startsWith('image/')) return 'image';
   }
 
-  // 2) Явная метка image от сервера.
   if (attachmentType === 'image') return 'image';
 
-  // 3) Эвристика по расширению (fallback для старых сообщений без meta.mime).
   const isImg =
     src.endsWith('.png') ||
     src.endsWith('.jpg') ||
@@ -210,9 +209,6 @@ const guessAttachmentKind = (
     src.endsWith('.avif');
   if (isImg) return 'image';
 
-  // Важно: .webm может быть и аудио, и видео.
-  // Без MIME лучше предпочесть «видео», но мы хотим, чтобы новые голосовые (webm/opus) отображались как аудио.
-  // Для новых сообщений у нас уже есть meta.mime, поэтому ниже — обычный порядок:
   const isAud =
     src.endsWith('.mp3') ||
     src.endsWith('.m4a') ||
@@ -220,7 +216,7 @@ const guessAttachmentKind = (
     src.endsWith('.ogg') ||
     src.endsWith('.opus') ||
     src.endsWith('.wav') ||
-    src.endsWith('.webm'); // если нет mime — допустим аудио
+    src.endsWith('.webm'); // без MIME допустим аудио
   if (isAud) return 'audio';
 
   const isVid =
@@ -231,7 +227,6 @@ const guessAttachmentKind = (
     src.endsWith('.ogv');
   if (isVid) return 'video';
 
-  // 4) Если есть URL, но тип не распознан — считаем файлом.
   if (attachmentUrl) return 'file';
   return '';
 };
@@ -330,6 +325,132 @@ const AttachmentLightbox: React.FC<{
   );
 };
 
+/* ====================== Аудио-плеер как в ЛС ====================== */
+
+const formatMs = (sec: number) => {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(m).padStart(1, '0')}:${String(s).padStart(2, '0')}`;
+};
+
+const AudioMessage: React.FC<{
+  id: string;           // id сообщения
+  src: string;          // ссылка на аудио
+  own: boolean;         // свой пузырь — для цвета
+  label?: string;       // подпись под дорожкой
+}> = ({ id, src, own, label }) => {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [ready, setReady] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [curr, setCurr] = useState(0);
+  const [dur, setDur] = useState(0);
+
+  // Автопауза остальных плееров
+  useEffect(() => {
+    const onForeignPlay = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail || detail.id !== id) {
+        try {
+          audioRef.current?.pause();
+          setPlaying(false);
+        } catch {}
+      }
+    };
+    window.addEventListener('humy:audio-playing', onForeignPlay as any);
+    return () =>
+      window.removeEventListener('humy:audio-playing', onForeignPlay as any);
+  }, [id]);
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (!playing) {
+      try {
+        window.dispatchEvent(new CustomEvent('humy:audio-playing', { detail: { id } }));
+      } catch {}
+      a.play().catch(() => {});
+    } else {
+      a.pause();
+    }
+  };
+
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onLoaded = () => {
+      setReady(true);
+      setDur(a.duration || 0);
+    };
+    const onTime = () => setCurr(a.currentTime || 0);
+    const onEnd = () => setPlaying(false);
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+
+    a.addEventListener('loadedmetadata', onLoaded);
+    a.addEventListener('timeupdate', onTime);
+    a.addEventListener('ended', onEnd);
+    a.addEventListener('play', onPlay);
+    a.addEventListener('pause', onPause);
+    return () => {
+      a.removeEventListener('loadedmetadata', onLoaded);
+      a.removeEventListener('timeupdate', onTime);
+      a.removeEventListener('ended', onEnd);
+      a.removeEventListener('play', onPlay);
+      a.removeEventListener('pause', onPause);
+    };
+  }, []);
+
+  const seek = (value: number) => {
+    const a = audioRef.current;
+    if (!a || !isFinite(value)) return;
+    a.currentTime = value;
+    setCurr(value);
+  };
+
+  const accent = own ? '#ffffff' : '#a78bfa'; // белый для своих, сиреневый для чужих
+  const secondary = own ? 'text-indigo-100/80' : 'text-white/70';
+
+  return (
+    <div className="w-full max-w-[70vw]">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={toggle}
+          className={`inline-flex items-center justify-center w-9 h-9 rounded-full ${
+            own ? 'bg-white/20 hover:bg-white/25' : 'bg-white/15 hover:bg-white/20'
+          } transition`}
+          title={playing ? 'Пауза' : 'Воспроизвести'}
+        >
+          {playing ? (
+            <Pause className="w-5 h-5 text-white" />
+          ) : (
+            <Play className="w-5 h-5 text-white" />
+          )}
+        </button>
+
+        <input
+          type="range"
+          min={0}
+          max={isFinite(dur) && dur > 0 ? dur : 0}
+          step={0.01}
+          value={isFinite(curr) ? curr : 0}
+          onChange={(e) => seek(Number(e.target.value))}
+          style={{ accentColor: accent }}
+          className="flex-1 h-2 rounded-full bg-white/20 outline-none"
+        />
+
+        <div className={`ml-1 text-xs ${secondary} tabular-nums`}>
+          {formatMs(curr)} / {formatMs(dur)}
+        </div>
+      </div>
+
+      {label ? <div className="mt-1 text-sm">{label}</div> : null}
+
+      <audio ref={audioRef} src={src} preload="metadata" />
+    </div>
+  );
+};
+
 /* ====================== Пузырь сообщения (с выбором) ====================== */
 
 type BubbleProps = {
@@ -358,9 +479,8 @@ const MessageBubble: React.FC<BubbleProps> = memo(
       }
     };
 
-    // Лонг-тап / правый клик для входа в режим выбора
+    // Лонг-тап / ПКМ для выбора
     const pressTimer = useRef<number | null>(null);
-
     const startPress = () => {
       if (selectionMode) return;
       pressTimer.current = window.setTimeout(() => {
@@ -453,11 +573,15 @@ const MessageBubble: React.FC<BubbleProps> = memo(
                 </button>
               )}
 
-            {/* Аудио: теперь всегда <audio controls> */}
+            {/* Аудио — новый плеер с дорожкой */}
             {msg.attachmentUrl && msg.attachmentKind === 'audio' && (
               <div className="mt-2 w-full max-w-[70vw]">
-                <audio src={msg.attachmentUrl} controls preload="metadata" className="w-full" />
-                {msg.content ? <div className="mt-1">{msg.content}</div> : null}
+                <AudioMessage
+                  id={msg.id}
+                  src={msg.attachmentUrl}
+                  own={mine}
+                  label={msg.content || undefined}
+                />
               </div>
             )}
 
@@ -480,7 +604,7 @@ const MessageBubble: React.FC<BubbleProps> = memo(
               </a>
             )}
 
-            {/* Текст */}
+            {/* Текст (если нет аудио; у аудио подпись уже под дорожкой) */}
             {!msg.attachmentUrl && msg.content ? (
               <div>{msg.content}</div>
             ) : msg.attachmentUrl && msg.content && msg.attachmentKind !== 'audio' ? (
@@ -976,7 +1100,7 @@ const ChatInterface: React.FC<Props> = ({ roomInfo, onBack }) => {
     clearSelection();
   };
 
-  /* ---------- Голосовые сообщения (как WhatsApp) ---------- */
+  /* ---------- Голосовые (как WhatsApp) ---------- */
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);

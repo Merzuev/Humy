@@ -28,7 +28,6 @@ from .serializers import (
     MessageSerializer,
     ConversationSerializer,
     ConversationCreateSerializer,
-    # — друзья / блок —
     FriendRequestSerializer, FriendRequestCreateSerializer,
     FriendshipSerializer, BlockSerializer, UserMiniSerializer,
 )
@@ -38,24 +37,17 @@ from .services import (
     mark_conversation_read,
     inc_unread_for_others,
     maybe_set_expires_at,
-    # — друзья / блок —
     are_friends, block_exists,
     send_friend_request, accept_friend_request, reject_friend_request,
     remove_friend, block_user, unblock_user,
 )
 
-# === уведомления (WS /ws/notifications/) ===
 from notifications.utils import notify_user
 
 User = get_user_model()
 
 
 def _other_participant(chat: Chat, me: User) -> Optional[User]:
-    """
-    Возвращает другого участника приватного чата.
-    Предполагается, что chat.participants — M2M с двумя пользователями.
-    """
-    # prefetch_related("participants") уже используется в get_chat
     for u in chat.participants.all():
         if u.id != me.id:
             return u
@@ -70,7 +62,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         .select_related("parent")
         .prefetch_related("children", "labels", "chats")
     )
-    serializer_class = FolderListSerializer  # по умолчанию — лёгкий
+    serializer_class = FolderListSerializer
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -93,7 +85,7 @@ class FolderViewSet(viewsets.ModelViewSet):
         return FolderListSerializer
 
 
-# ======================= CHAT (публичные комнаты) =======================
+# ======================= CHAT (public) =======================
 
 class ChatViewSet(viewsets.ModelViewSet):
     queryset = Chat.objects.all().prefetch_related("folders", "labels")
@@ -107,17 +99,14 @@ class ChatViewSet(viewsets.ModelViewSet):
         return qs.distinct()
 
 
-# ======================= MESSAGE (в комнатах) =======================
+# ======================= MESSAGE (public rooms) =======================
 
 class MessageCursorPagination(CursorPagination):
     page_size = 30
-    ordering = "-created_at"  # новые сначала
+    ordering = "-created_at"
 
 
 class MessageViewSet(viewsets.ModelViewSet):
-    """
-    Сообщения в ПУБЛИЧНЫХ/ГРУППОВЫХ чатах.
-    """
     serializer_class = MessageSerializer
     pagination_class = MessageCursorPagination
     permission_classes = [IsAuthenticatedOrReadOnly]
@@ -133,7 +122,6 @@ class MessageViewSet(viewsets.ModelViewSet):
         if room_id:
             qs = qs.filter(room_id=room_id)
 
-        # Скрытые «у себя»
         user = self.request.user
         if user and getattr(user, "is_authenticated", False):
             hidden_ids = HiddenMessage.objects.filter(user=user).values_list("message_id", flat=True)
@@ -146,7 +134,8 @@ class MessageViewSet(viewsets.ModelViewSet):
         is_auth = bool(getattr(user, "is_authenticated", False))
 
         display_name = (
-            getattr(user, "username", None)
+            getattr(user, "nickname", None)
+            or getattr(user, "username", None)
             or getattr(user, "email", None)
             or "User"
         ) if is_auth else "User"
@@ -160,10 +149,15 @@ class MessageViewSet(viewsets.ModelViewSet):
             ct = (getattr(attachment_file, "content_type", "") or "").lower()
             if ct:
                 meta["mime"] = ct
+            # максимально бережно к модели: используем константы, если они есть
             if ct.startswith("image/"):
-                attachment_type = Message.ATTACHMENT_TYPE_IMAGE
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_IMAGE", "image")
+            elif ct.startswith("audio/") and hasattr(Message, "ATTACHMENT_TYPE_AUDIO"):
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_AUDIO")
+            elif ct.startswith("video/") and hasattr(Message, "ATTACHMENT_TYPE_VIDEO"):
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_VIDEO")
             else:
-                attachment_type = Message.ATTACHMENT_TYPE_FILE
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_FILE", "file")
             attachment_name = getattr(attachment_file, "name", "") or ""
 
         serializer.save(
@@ -175,9 +169,6 @@ class MessageViewSet(viewsets.ModelViewSet):
         )
 
     def destroy(self, request, *args, **kwargs):
-        """
-        DELETE /api/messages/{id}/?for_all=true — удалить у всех.
-        """
         instance: Message = self.get_object()
         for_all = str(request.query_params.get("for_all", "")).lower() in ("1", "true", "yes")
 
@@ -210,9 +201,6 @@ class MessageViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def hide(self, request, pk=None):
-        """
-        POST /api/messages/{id}/hide/ — «Удалить у себя».
-        """
         user = request.user
         if not user or not user.is_authenticated:
             return Response(status=status.HTTP_401_UNAUTHORIZED)
@@ -226,20 +214,15 @@ class MessageViewSet(viewsets.ModelViewSet):
         return Response({"status": "hidden"}, status=status.HTTP_200_OK)
 
 
-# ======================= CONVERSATIONS (Личные сообщения) =======================
+# ======================= CONVERSATIONS (DM) =======================
 
 class ConversationsViewSet(viewsets.GenericViewSet,
                            mixins.ListModelMixin,
                            mixins.RetrieveModelMixin):
-    """
-    /api/conversations/  [GET, POST]
-    /api/conversations/{id}/ [GET, PATCH]
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = ConversationSerializer
 
     def get_queryset(self):
-        # только приватные чаты, где участвует текущий пользователь
         return (
             Chat.objects
             .filter(type=ChatType.PRIVATE, participants=self.request.user)
@@ -261,11 +244,9 @@ class ConversationsViewSet(viewsets.GenericViewSet,
         ser.is_valid(raise_exception=True)
         other_user = get_object_or_404(User, pk=ser.validated_data["other_user_id"])
 
-        # Чёрный список — запрет
         if block_exists(request.user, other_user):
             return Response({"detail": "Пользователь недоступен для диалога."}, status=status.HTTP_403_FORBIDDEN)
 
-        # (опционально) ЛС только между друзьями
         if getattr(settings, "FRIENDS_REQUIRED_FOR_DM", False) and not are_friends(request.user, other_user):
             return Response({"detail": "Личные сообщения доступны только между друзьями."}, status=status.HTTP_403_FORBIDDEN)
 
@@ -279,9 +260,6 @@ class ConversationsViewSet(viewsets.GenericViewSet,
         return Response(ser.data)
 
     def partial_update(self, request, *args, **kwargs):
-        """
-        Настройки: is_secret, self_destruct_timer.
-        """
         chat = get_object_or_404(self.get_queryset(), pk=kwargs["pk"])
         allowed = {"is_secret", "self_destruct_timer"}
         payload = {k: v for k, v in request.data.items() if k in allowed}
@@ -306,10 +284,9 @@ class ConversationMessagesView(generics.ListCreateAPIView):
     """
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated, IsChatParticipant]
-    pagination_class = None  # если у тебя была CursorPagination — верни её
+    pagination_class = None
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
-    # ---- helpers ----
     def get_chat(self) -> Chat:
         chat_id = self.kwargs["pk"]
         return get_object_or_404(
@@ -317,7 +294,6 @@ class ConversationMessagesView(generics.ListCreateAPIView):
             pk=chat_id
         )
 
-    # для IsChatParticipant
     def get_object(self):
         return self.get_chat()
 
@@ -333,7 +309,6 @@ class ConversationMessagesView(generics.ListCreateAPIView):
     def list(self, request, *args, **kwargs):
         chat = self.get_chat()
         resp = super().list(request, *args, **kwargs)
-        # помечаем прочитанным и шлём событие собеседнику, чтобы обнулился бейдж
         mark_conversation_read(chat, request.user)
         try:
             other = _other_participant(chat, request.user)
@@ -343,17 +318,15 @@ class ConversationMessagesView(generics.ListCreateAPIView):
             pass
         return resp
 
-    # --------- ВАЖНО: подставляем room до валидации ---------
     def create(self, request, *args, **kwargs):
         chat = self.get_chat()
 
-        # Корректно формируем изменяемые данные и подставляем room
+        # подставляем room до валидации
         incoming = request.data
         if isinstance(incoming, QueryDict):
             data = incoming.copy()
-            data["room"] = str(chat.id)  # QueryDict хранит строки
+            data["room"] = str(chat.id)
         else:
-            # JSON-случай
             data = dict(incoming)
             data["room"] = chat.id
 
@@ -361,24 +334,48 @@ class ConversationMessagesView(generics.ListCreateAPIView):
         try:
             serializer.is_valid(raise_exception=True)
         except ValidationError as exc:
-            # На редкий случай, когда валидация всё равно упёрлась в room.
-            # Даём «partial=True», но room всё равно передадим в save(...)
             if isinstance(exc.detail, dict) and "room" in exc.detail:
                 serializer = self.get_serializer(data=data, context={"request": request}, partial=True)
                 serializer.is_valid(raise_exception=True)
             else:
                 raise
 
-        # Создаём сообщение (room и author гарантированно проставляем на сервере)
-        msg: Message = serializer.save(room=chat, author=request.user)
+        # вычисляем attachment_* и meta.mime (для аудио/видео/фото)
+        attachment_file = request.FILES.get("attachment")
+        attachment_type = ""
+        attachment_name = ""
+        meta: dict[str, Any] = {}
+
+        if attachment_file:
+            ct = (getattr(attachment_file, "content_type", "") or "").lower()
+            if ct:
+                meta["mime"] = ct
+            if ct.startswith("image/"):
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_IMAGE", "image")
+            elif ct.startswith("audio/") and hasattr(Message, "ATTACHMENT_TYPE_AUDIO"):
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_AUDIO")
+            elif ct.startswith("video/") and hasattr(Message, "ATTACHMENT_TYPE_VIDEO"):
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_VIDEO")
+            else:
+                attachment_type = getattr(Message, "ATTACHMENT_TYPE_FILE", "file")
+            attachment_name = getattr(attachment_file, "name", "") or ""
+
+        # создаём сообщение
+        msg: Message = serializer.save(
+            room=chat,
+            author=request.user,
+            attachment_type=attachment_type,
+            attachment_name=attachment_name,
+            meta=meta or {},
+        )
         maybe_set_expires_at(msg)
 
-        # обновим last_message + unread для собеседника
+        # обновляем last_message + unread
         chat.last_message = msg
         chat.save(update_fields=["last_message"])
         inc_unread_for_others(chat, request.user)
 
-        # разошлём по WS в группу chat_<id> (чтобы открытый чат получил сообщение)
+        # WS в открытую комнату
         try:
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
@@ -391,11 +388,10 @@ class ConversationMessagesView(generics.ListCreateAPIView):
         except Exception:
             pass
 
-        # и индивидуальное уведомление собеседнику для списка диалогов (бейдж/последняя строка)
+        # уведомление собеседнику для списка диалогов
         try:
             other = _other_participant(chat, request.user)
             if other:
-                # Определяем тип вложения по полям сообщения
                 att_kind = None
                 att_name = getattr(msg, "attachment_name", None) or ""
                 att_type = (getattr(msg, "attachment_type", "") or "").lower()
@@ -404,7 +400,6 @@ class ConversationMessagesView(generics.ListCreateAPIView):
                     mime = (msg.meta.get("mime") or "").lower()
 
                 if att_type:
-                    # Модель использует внутренние константы, приведём к фронтовым
                     if "image" in att_type:
                         att_kind = "image"
                     elif "audio" in att_type:
@@ -437,17 +432,15 @@ class ConversationMessagesView(generics.ListCreateAPIView):
         except Exception:
             pass
 
-        return Response(MessageSerializer(msg, context={"request": request}).data, status=status.HTTP_201_CREATED)
+        return Response(
+            MessageSerializer(msg, context={"request": request}).data,
+            status=status.HTTP_201_CREATED
+        )
 
 
 # ======================= FRIENDS / BLOCK =======================
 
 class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
-    """
-    /api/friends/requests/             [GET, POST]
-    /api/friends/requests/{id}/accept  [POST]
-    /api/friends/requests/{id}/reject  [POST]
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = FriendRequestSerializer
 
@@ -475,7 +468,6 @@ class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
         fr = send_friend_request(request.user, to_user)
         out = FriendRequestSerializer(fr, context={"request": request}).data
 
-        # уведомим адресата через WS /ws/notifications/
         try:
             from_name = getattr(request.user, "nickname", None) or request.user.get_username()
             notify_user(
@@ -497,8 +489,6 @@ class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
         if fr.to_user_id != request.user.id:
             return Response(status=403)
         accept_friend_request(fr)
-
-        # уведомим автора заявки, что заявка принята
         try:
             me_name = getattr(request.user, "nickname", None) or request.user.get_username()
             notify_user(
@@ -519,14 +509,10 @@ class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
         if fr.to_user_id != request.user.id:
             return Response(status=403)
         reject_friend_request(fr)
-        # (по желанию можно уведомлять автора об отказе отдельным типом)
         return Response(FriendRequestSerializer(fr, context={"request": request}).data)
 
 
 class FriendsViewSet(viewsets.ViewSet):
-    """
-    /api/friends/ [GET, DELETE /api/friends/{user_id}/]
-    """
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
@@ -546,10 +532,6 @@ class FriendsViewSet(viewsets.ViewSet):
 
 
 class BlockViewSet(viewsets.ViewSet):
-    """
-    /api/block/           [GET, POST]
-    /api/block/{user_id}/ [DELETE]
-    """
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
@@ -569,14 +551,9 @@ class BlockViewSet(viewsets.ViewSet):
         return Response(status=204)
 
 
-# ======================= USER SEARCH (для модалок «Новый диалог» и «Добавить в друзья») =======================
+# ======================= USER SEARCH =======================
 
 class UserSearchView(generics.ListAPIView):
-    """
-    GET /api/users/search/?q=....  (минимум 4 символа)
-    Ищем только по тем полям, которые реально есть в кастомной модели пользователя.
-    Себя всегда исключаем.
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = UserMiniSerializer
 
@@ -586,10 +563,8 @@ class UserSearchView(generics.ListAPIView):
         if len(q) < 4:
             return UserModel.objects.none()
 
-        # Собираем список доступных полей у кастомной модели
         field_names = {f.name for f in UserModel._meta.get_fields()}
 
-        # Динамически добавляем условия только по существующим полям
         cond = Q()
         added = False
         for fname in ("nickname", "username", "email", "first_name", "last_name"):
@@ -597,7 +572,6 @@ class UserSearchView(generics.ListAPIView):
                 cond |= Q(**{f"{fname}__icontains": q})
                 added = True
 
-        # Если ни одно из ожидаемых полей не нашлось — отдаём пустой набор
         if not added:
             return UserModel.objects.none()
 

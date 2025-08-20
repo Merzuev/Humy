@@ -19,13 +19,7 @@ class LabelSerializer(serializers.ModelSerializer):
 # ===== Chats / Folders =====
 
 class ChatSerializer(serializers.ModelSerializer):
-    """
-    Публичные чаты/комнаты. Сохраняем текущую контрактную схему,
-    чтобы не ломать существующий фронтенд.
-    """
-    folders = serializers.PrimaryKeyRelatedField(
-        many=True, queryset=Folder.objects.all()
-    )
+    folders = serializers.PrimaryKeyRelatedField(many=True, queryset=Folder.objects.all())
     labels = LabelSerializer(many=True, read_only=True)
 
     class Meta:
@@ -34,18 +28,12 @@ class ChatSerializer(serializers.ModelSerializer):
 
 
 class FolderListSerializer(serializers.ModelSerializer):
-    """
-    Короткий сериализатор (для списков) — без глубоких children/chats.
-    """
     class Meta:
         model = Folder
         fields = ["id", "name", "parent"]
 
 
 class FolderSerializer(serializers.ModelSerializer):
-    """
-    Полный сериализатор папки с children/chats.
-    """
     children = serializers.SerializerMethodField()
     chats = serializers.SerializerMethodField()
     labels = LabelSerializer(many=True, read_only=True)
@@ -73,15 +61,11 @@ class FolderSerializer(serializers.ModelSerializer):
 # ===== Users (mini) =====
 
 class UserMiniSerializer(serializers.Serializer):
-    """
-    Мини-представление пользователя для сообщений/диалогов.
-    """
     id = serializers.IntegerField()
     nickname = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
 
     def get_nickname(self, obj) -> str:
-        # nickname -> username -> email -> fallback
         return (
             getattr(obj, "nickname", None)
             or getattr(obj, "username", None)
@@ -90,7 +74,6 @@ class UserMiniSerializer(serializers.Serializer):
         )
 
     def get_avatar(self, obj) -> Optional[str]:
-        # Если у User есть поле avatar (ImageField/FileField)
         avatar = getattr(obj, "avatar", None)
         request = self.context.get("request")
         if avatar and hasattr(avatar, "url"):
@@ -101,29 +84,24 @@ class UserMiniSerializer(serializers.Serializer):
 # ===== Messages =====
 
 class MessageSerializer(serializers.ModelSerializer):
-    """
-    Универсальный сериализатор сообщений:
-      - совместим с публичными комнатами (поле room остаётся writeable),
-      - позволяет ЛС создавать сообщение без room (мы подставляем его во view),
-      - даёт фронту удобные флаги/мини-автора.
-    """
-    # Доп. поля для фронта (совместимость со старым UI)
+    # совместимость/удобство
     author_username = serializers.CharField(
         source="author.username", allow_null=True, read_only=True
     )
+    author = serializers.SerializerMethodField()
+    author_id = serializers.IntegerField(source="author_id", read_only=True)
+
     attachment_url = serializers.SerializerMethodField()
     is_image = serializers.SerializerMethodField()
-
-    # Новые поля для DM/удобства
-    author = serializers.SerializerMethodField()
     is_own = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
         fields = [
             "id",
-            "room",                 # для публичных чатов клиент может прислать room
-            "author",               # mini-объект {id, nickname, avatar}
+            "room",                 # в публичных чатах можно прислать room
+            "author",               # mini {id, nickname, avatar}
+            "author_id",
             "author_username",      # совместимость
             "display_name",
             "content",
@@ -143,6 +121,7 @@ class MessageSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "author",
+            "author_id",
             "author_username",
             "created_at",
             "edited_at",
@@ -151,17 +130,13 @@ class MessageSerializer(serializers.ModelSerializer):
             "is_image",
             "is_own",
         ]
-        # КЛЮЧЕВАЯ ПРАВКА: room необязателен (для ЛС), но остаётся доступным для публичных
         extra_kwargs = {
-            "room": {"required": False, "allow_null": True},
+            "room": {"required": False, "allow_null": True},  # ЛС создаём без room от клиента
         }
-
-    # ---------- helpers ----------
 
     def get_author(self, obj) -> dict:
         user = obj.author
         if not user:
-            # анонимный/системный — используем display_name
             return {"id": None, "nickname": obj.display_name or "Unknown", "avatar": None}
         return UserMiniSerializer(user, context=self.context).data
 
@@ -189,9 +164,6 @@ class MessageSerializer(serializers.ModelSerializer):
 # ===== Conversations (Личные сообщения) =====
 
 class ConversationSerializer(serializers.ModelSerializer):
-    """
-    Элемент списка личных диалогов для текущего пользователя.
-    """
     other_user = serializers.SerializerMethodField()
     last_message_text = serializers.SerializerMethodField()
     last_message_created_at = serializers.SerializerMethodField()
@@ -233,17 +205,14 @@ class ConversationSerializer(serializers.ModelSerializer):
 
 
 class ConversationCreateSerializer(serializers.Serializer):
-    """
-    Валидация создания/получения приватной беседы.
-    """
     other_user_id = serializers.IntegerField()
 
     def validate(self, attrs):
-        request = self.context["request"]
-        other_user_id = attrs["other_user_id"]
-        if request.user.id == other_user_id:
-            raise serializers.ValidationError("Нельзя создать диалог с самим собой.")
-        return attrs
+      request = self.context["request"]
+      other_user_id = attrs["other_user_id"]
+      if request.user.id == other_user_id:
+          raise serializers.ValidationError("Нельзя создать диалог с самим собой.")
+      return attrs
 
 
 # ===== Друзья / Блок =====
