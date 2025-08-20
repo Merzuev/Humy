@@ -2,44 +2,27 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { 
   Settings,
-  User,
   Bell,
   Shield,
   Globe,
   Moon,
   Sun,
-  Volume2,
-  VolumeX,
-  Eye,
-  EyeOff,
-  Smartphone,
   Monitor,
   Palette,
-  Download,
-  Upload,
   Trash2,
   LogOut,
   HelpCircle,
   Info,
   ArrowLeft,
   Sparkles,
-  Lock,
-  Key,
-  Database,
-  Wifi,
-  WifiOff,
-  MessageSquare,
-  Camera,
-  Mic,
-  MicOff,
-  Video,
-  VideoOff,
-  Zap,
   RotateCcw,
   AlertTriangle,
   Check,
   X,
-  Type
+  Type,
+  MessageSquare,
+  Database,
+  Zap
 } from 'lucide-react';
 import { Button, Select } from '../ui';
 import apiClient from '../../api/instance';
@@ -103,9 +86,14 @@ const LANGUAGE_OPTIONS = [
   { value: 'hi', label: '🇮🇳 हिन्दी' },
 ];
 
+// Флаги скрытия секций по твоему требованию:
+const HIDE_THEME_SECTION = true;
+const HIDE_FONT_SIZE_SECTION = true;
+const HIDE_DATA_STORAGE_SECTION = true;
+
 export function AppSettings({ onBack }: AppSettingsProps) {
   const { t, i18n } = useTranslation();
-  const { user, setUser, logout, deleteAccount } = useUser();
+  const { logout, deleteAccount } = useUser();
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -153,18 +141,17 @@ export function AppSettings({ onBack }: AppSettingsProps) {
     dataUsage: 'medium'
   });
 
-  // Load settings from API on component mount
+  // Загружаем настройки из API при монтировании
   useEffect(() => {
     loadSettings();
   }, []);
 
-  // Auto-save settings when they change (with debounce)
+  // Автосохранение настроек (debounce 1s)
   useEffect(() => {
     if (!isLoading) {
       const timeoutId = setTimeout(() => {
         saveSettings();
-      }, 1000); // 1 second debounce
-
+      }, 1000);
       return () => clearTimeout(timeoutId);
     }
   }, [settings, isLoading]);
@@ -174,10 +161,10 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       setIsLoading(true);
       setError(null);
       
+      // ВАЖНО: без ведущего слэша, чтобы не срезать '/api' из baseURL
       const response = await apiClient.get('api/users/settings/');
-      const serverSettings = response.data;
+      const serverSettings = response.data ?? {};
       
-      // Transform server settings to match our interface
       const transformedSettings: SettingsState = {
         // General settings
         language: serverSettings.language || i18n.language,
@@ -219,15 +206,15 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       
       setSettings(transformedSettings);
       
-      // Apply language change immediately if different
-      if (transformedSettings.language !== i18n.language) {
+      // Применяем язык сразу
+      if (transformedSettings.language && transformedSettings.language !== i18n.language) {
         i18n.changeLanguage(transformedSettings.language);
       }
     } catch (err: any) {
-      if (err.response?.status === 404) {
-        // Settings not found, use defaults
+      if (err?.response?.status === 404) {
+        // Настройки отсутствуют на сервере — оставляем значения по умолчанию
       } else {
-        setError(t('settings.loadFailed', 'Failed to load settings'));
+        setError(t('settings.loadFailed', 'Не удалось загрузить настройки'));
       }
     } finally {
       setIsLoading(false);
@@ -240,7 +227,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       setError(null);
       setSaveSuccess(false);
       
-      // Transform settings to server format
+      // Тело для сервера (snake_case)
       const serverSettings = {
         language: settings.language,
         theme: settings.theme,
@@ -267,17 +254,18 @@ export function AppSettings({ onBack }: AppSettingsProps) {
         data_usage: settings.dataUsage
       };
       
-      await apiClient.put('/users/settings/', serverSettings);
+      // ВАЖНО: без ведущего слэша
+      await apiClient.put('api/users/settings/', serverSettings);
       
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2000); // Hide success message after 2 seconds
+      setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err: any) {
-      if (err.response?.status === 400) {
-        setError(t('settings.invalidSettings', 'Invalid settings data'));
-      } else if (err.response?.status === 403) {
-        setError(t('settings.saveForbidden', 'Not allowed to save settings'));
+      if (err?.response?.status === 400) {
+        setError(t('settings.invalidSettings', 'Некорректные данные настроек'));
+      } else if (err?.response?.status === 403) {
+        setError(t('settings.saveForbidden', 'Нет прав на сохранение настроек'));
       } else {
-        setError(t('settings.saveFailed', 'Failed to save settings'));
+        setError(t('settings.saveFailed', 'Не удалось сохранить настройки'));
       }
     } finally {
       setIsSaving(false);
@@ -287,12 +275,10 @@ export function AppSettings({ onBack }: AppSettingsProps) {
   const updateSetting = <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => {
     setSettings(prev => ({ ...prev, [key]: value }));
     
-    // Apply language change immediately
+    // Мгновенная смена языка
     if (key === 'language') {
       i18n.changeLanguage(value as string);
     }
-    
-    // Clear any previous errors
     setError(null);
   };
 
@@ -325,8 +311,6 @@ export function AppSettings({ onBack }: AppSettingsProps) {
     
     setSettings(defaultSettings);
     setShowResetConfirm(false);
-    
-    // Save reset settings to server
     saveSettings();
   };
 
@@ -377,7 +361,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 rounded-2xl sm:rounded-3xl">
       <div className="bg-white/10 backdrop-blur-xl rounded-xl p-4 sm:p-6 flex items-center space-x-3">
         <div className="w-6 h-6 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
-        <span className="text-white font-medium">{t('common.loading', 'Loading...')}</span>
+        <span className="text-white font-medium">{t('common.loading', 'Загрузка...')}</span>
       </div>
     </div>
   );
@@ -387,7 +371,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       return (
         <div className="flex items-center space-x-2 text-yellow-400">
           <div className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin"></div>
-          <span className="text-sm">{t('settings.saving', 'Saving...')}</span>
+          <span className="text-sm">{t('settings.saving', 'Сохранение...')}</span>
         </div>
       );
     }
@@ -396,7 +380,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       return (
         <div className="flex items-center space-x-2 text-green-400">
           <Check className="w-4 h-4" />
-          <span className="text-sm">{t('settings.saved', 'Saved')}</span>
+          <span className="text-sm">{t('settings.saved', 'Сохранено')}</span>
         </div>
       );
     }
@@ -547,62 +531,66 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                   />
                 </div>
 
-                {/* Тема */}
-                <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
-                  <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
-                    <Palette className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-purple-400" />
-                    {t('settings.theme', 'Тема оформления')}
-                  </label>
-                  <div className="grid grid-cols-3 gap-2 sm:gap-3">
-                    {[
-                      { value: 'light', label: t('settings.light', 'Светлая'), icon: <Sun className="w-3 h-3 sm:w-4 sm:h-4" /> },
-                      { value: 'dark', label: t('settings.dark', 'Тёмная'), icon: <Moon className="w-3 h-3 sm:w-4 sm:h-4" /> },
-                      { value: 'auto', label: t('settings.auto', 'Авто'), icon: <Monitor className="w-3 h-3 sm:w-4 sm:h-4" /> }
-                    ].map((theme) => (
-                      <button
-                        key={theme.value}
-                        onClick={() => updateSetting('theme', theme.value as any)}
-                        className={`p-2 sm:p-3 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 border flex items-center justify-center space-x-1 sm:space-x-2 ${
-                          settings.theme === theme.value
-                            ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-500/50'
-                            : 'bg-white/10 text-gray-300 hover:bg-white/20 border-white/20'
-                        }`}
-                        disabled={isSaving}
-                      >
-                        {theme.icon}
-                        <span>{theme.label}</span>
-                      </button>
-                    ))}
+                {/* Тема (СКРЫТО) */}
+                {!HIDE_THEME_SECTION && (
+                  <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
+                    <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
+                      <Palette className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-purple-400" />
+                      {t('settings.theme', 'Тема оформления')}
+                    </label>
+                    <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                      {[
+                        { value: 'light', label: t('settings.light', 'Светлая'), icon: <Sun className="w-3 h-3 sm:w-4 sm:h-4" /> },
+                        { value: 'dark', label: t('settings.dark', 'Тёмная'), icon: <Moon className="w-3 h-3 sm:w-4 sm:h-4" /> },
+                        { value: 'auto', label: t('settings.auto', 'Авто'), icon: <Monitor className="w-3 h-3 sm:w-4 sm:h-4" /> }
+                      ].map((theme) => (
+                        <button
+                          key={theme.value}
+                          onClick={() => updateSetting('theme', theme.value as any)}
+                          className={`p-2 sm:p-3 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 border flex items-center justify-center space-x-1 sm:space-x-2 ${
+                            settings.theme === theme.value
+                              ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-500/50'
+                              : 'bg-white/10 text-gray-300 hover:bg-white/20 border-white/20'
+                          }`}
+                          disabled={isSaving}
+                        >
+                          {theme.icon}
+                          <span>{theme.label}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* Размер шрифта */}
-                <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
-                  <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
-                    <Type className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-green-400" />
-                    {t('settings.fontSize', 'Размер шрифта')}
-                  </label>
-                  <div className="grid grid-cols-3 gap-2 sm:gap-3">
-                    {[
-                      { value: 'small', label: t('settings.small', 'Маленький') },
-                      { value: 'medium', label: t('settings.medium', 'Средний') },
-                      { value: 'large', label: t('settings.large', 'Большой') }
-                    ].map((size) => (
-                      <button
-                        key={size.value}
-                        onClick={() => updateSetting('fontSize', size.value as any)}
-                        className={`p-2 sm:p-3 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 border ${
-                          settings.fontSize === size.value
-                            ? 'bg-gradient-to-r from-green-600 to-teal-600 text-white border-green-500/50'
-                            : 'bg-white/10 text-gray-300 hover:bg-white/20 border-white/20'
-                        }`}
-                        disabled={isSaving}
-                      >
-                        {size.label}
-                      </button>
-                    ))}
+                {/* Размер шрифта (СКРЫТО) */}
+                {!HIDE_FONT_SIZE_SECTION && (
+                  <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
+                    <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
+                      <Type className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-green-400" />
+                      {t('settings.fontSize', 'Размер шрифта')}
+                    </label>
+                    <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                      {[
+                        { value: 'small', label: t('settings.small', 'Маленький') },
+                        { value: 'medium', label: t('settings.medium', 'Средний') },
+                        { value: 'large', label: t('settings.large', 'Большой') }
+                      ].map((size) => (
+                        <button
+                          key={size.value}
+                          onClick={() => updateSetting('fontSize', size.value as any)}
+                          className={`p-2 sm:p-3 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 border ${
+                            settings.fontSize === size.value
+                              ? 'bg-gradient-to-r from-green-600 to-teal-600 text-white border-green-500/50'
+                              : 'bg-white/10 text-gray-300 hover:bg-white/20 border-white/20'
+                          }`}
+                          disabled={isSaving}
+                        >
+                          {size.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             </div>
 
@@ -672,7 +660,8 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                 {/* Видимость профиля */}
                 <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
                   <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
-                    <Eye className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-blue-400" />
+                    {/* простая иконка "глаз" заменена на SVG в ранней версии — оставим без зависимостей */}
+                    <svg className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-blue-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12c-2.761 0-5-2.239-5-5 0-2.762 2.239-5 5-5s5 2.238 5 5c0 2.761-2.239 5-5 5zm0-8a3 3 0 100 6 3 3 0 000-6z"/></svg>
                     {t('settings.profileVisibility', 'Видимость профиля')}
                   </label>
                   <div className="grid grid-cols-3 gap-2 sm:gap-3">
@@ -791,82 +780,30 @@ export function AppSettings({ onBack }: AppSettingsProps) {
               </div>
             </div>
 
-            {/* Данные и хранилище */}
-            <div className="bg-white/10 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-2xl border border-white/20 p-4 sm:p-8 relative">
-              {isLoading && <LoadingOverlay />}
-              <div className="absolute -top-4 -right-4 sm:-top-6 sm:-right-6 w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-400 to-indigo-400 rounded-full blur-xl opacity-60"></div>
-              
-              <h2 className="text-xl sm:text-2xl font-bold text-white mb-4 sm:mb-6 flex items-center">
-                <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-purple-500 to-indigo-600 rounded-lg flex items-center justify-center mr-2 sm:mr-3">
-                  <Database className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
-                </div>
-                {t('settings.dataStorage', 'Данные и хранилище')}
-              </h2>
-              
-              <div className="space-y-3 sm:space-y-4">
-                {/* Использование данных */}
-                <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
-                  <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
-                    <Zap className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-yellow-400" />
-                    {t('settings.dataUsage', 'Использование данных')}
-                  </label>
-                  <div className="grid grid-cols-3 gap-2 sm:gap-3">
-                    {[
-                      { value: 'low', label: t('settings.low', 'Низкое') },
-                      { value: 'medium', label: t('settings.medium', 'Среднее') },
-                      { value: 'high', label: t('settings.high', 'Высокое') }
-                    ].map((usage) => (
-                      <button
-                        key={usage.value}
-                        onClick={() => updateSetting('dataUsage', usage.value as any)}
-                        className={`p-2 sm:p-3 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 border ${
-                          settings.dataUsage === usage.value
-                            ? 'bg-gradient-to-r from-yellow-600 to-orange-600 text-white border-yellow-500/50'
-                            : 'bg-white/10 text-gray-300 hover:bg-white/20 border-white/20'
-                        }`}
-                        disabled={isSaving}
-                      >
-                        {usage.label}
-                      </button>
-                    ))}
+            {/* Данные и хранилище (СКРЫТО) */}
+            {!HIDE_DATA_STORAGE_SECTION && (
+              <div className="bg-white/10 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-2xl border border-white/20 p-4 sm:p-8 relative">
+                {isLoading && <LoadingOverlay />}
+                <div className="absolute -top-4 -right-4 sm:-top-6 sm:-right-6 w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-400 to-indigo-400 rounded-full blur-xl opacity-60"></div>
+                
+                <h2 className="text-xl sm:text-2xl font-bold text-white mb-4 sm:mb-6 flex items-center">
+                  <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-purple-500 to-indigo-600 rounded-lg flex items-center justify-center mr-2 sm:mr-3">
+                    <Database className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
+                  </div>
+                  {t('settings.dataStorage', 'Данные и хранилище')}
+                </h2>
+                
+                <div className="space-y-3 sm:space-y-4">
+                  <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
+                    <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
+                      <Zap className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-yellow-400" />
+                      {t('settings.dataUsage', 'Использование данных')}
+                    </label>
+                    {/* скрытая реализация */}
                   </div>
                 </div>
-
-                <ToggleSwitch
-                  enabled={settings.autoConnect}
-                  onChange={(value) => updateSetting('autoConnect', value)}
-                  label={t('settings.autoConnect', 'Автоподключение')}
-                  description={t('settings.autoConnectDesc', 'Автоматически подключаться при запуске приложения')}
-                />
-
-                {/* Управление данными */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
-                  <button className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20 hover:bg-white/10 transition-all duration-200 text-left">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <Download className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="text-white font-medium text-sm sm:text-base">{t('settings.exportData', 'Экспорт данных')}</h4>
-                        <p className="text-gray-400 text-xs sm:text-sm">{t('settings.exportDataDesc', 'Скачать копию ваших данных')}</p>
-                      </div>
-                    </div>
-                  </button>
-
-                  <button className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20 hover:bg-white/10 transition-all duration-200 text-left">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-green-500 to-teal-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <Upload className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="text-white font-medium text-sm sm:text-base">{t('settings.importData', 'Импорт данных')}</h4>
-                        <p className="text-gray-400 text-xs sm:text-sm">{t('settings.importDataDesc', 'Восстановить данные из резервной копии')}</p>
-                      </div>
-                    </div>
-                  </button>
-                </div>
               </div>
-            </div>
+            )}
 
             {/* Справка и поддержка */}
             <div className="bg-white/10 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-2xl border border-white/20 p-4 sm:p-8 relative">
@@ -977,7 +914,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
         </div>
       </div>
 
-      {/* Confirmation Modals */}
+      {/* Модальные окна подтверждения */}
       <ConfirmModal
         isOpen={showResetConfirm}
         onClose={() => setShowResetConfirm(false)}
@@ -1011,8 +948,8 @@ export function AppSettings({ onBack }: AppSettingsProps) {
         icon={<Trash2 className="w-4 h-4 sm:w-5 sm:h-5 text-white" />}
       />
 
-      {/* Custom Scrollbar Styles */}
-      <style jsx>{`
+      {/* Кастомный скроллбар — БЕЗ jsx-атрибута */}
+      <style>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 4px;
         }

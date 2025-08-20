@@ -5,12 +5,13 @@ from io import BytesIO
 import json
 from django.core.files.uploadedfile import InMemoryUploadedFile
 
-
 # Поддержка HEIC (iPhone)
 from pillow_heif import register_heif_opener
 register_heif_opener()
 
 User = get_user_model()
+
+from .models import UserSettings  # <-- добавили импорт
 
 
 # ✅ Регистрация пользователя
@@ -96,8 +97,6 @@ class ProfileSerializer(serializers.ModelSerializer):
             'interface_language',
         ]
         read_only_fields = ['email']
-    
-    
 
     def validate_avatar(self, avatar):
         if not avatar:
@@ -133,11 +132,38 @@ class ProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f'Ошибка при обработке изображения: {str(e)}')
 
     def update(self, instance, validated_data):
-        """
-        Обновляет данные профиля, корректно обрабатывая удаление аватара.
-        """
+        """Обновляет данные профиля, корректно обрабатывая удаление аватара."""
         if 'avatar' in validated_data and validated_data['avatar'] is None:
             if instance.avatar:
                 instance.avatar.delete(save=False)
-
         return super().update(instance, validated_data)
+
+
+# ✅ Сериализатор настроек пользователя (для /api/users/settings/)
+class UserSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserSettings
+        fields = (
+            # General
+            'language', 'theme', 'font_size',
+            # Notifications
+            'push_notifications', 'sound_notifications', 'email_notifications',
+            'message_notifications', 'group_notifications',
+            # Privacy
+            'profile_visibility', 'online_status', 'read_receipts', 'last_seen',
+            # Chat
+            'auto_download_images', 'auto_download_videos',
+            'auto_download_documents', 'enter_to_send',
+            # Media
+            'camera_permission', 'microphone_permission', 'autoplay_videos',
+            # Security
+            'two_factor_auth', 'session_timeout',
+            # Network
+            'auto_connect', 'data_usage',
+        )
+
+    def validate_session_timeout(self, value):
+        # Безопасные пределы: 1..1440 минут (сутки)
+        if value < 1 or value > 1440:
+            raise serializers.ValidationError("Session timeout must be between 1 and 1440 minutes.")
+        return value
