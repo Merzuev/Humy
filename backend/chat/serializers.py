@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from mimetypes import guess_type
 
 from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Folder, Chat, Label, Message, ChatParticipant
 from .models import FriendRequest, FriendRequestStatus, Friendship, Block
+
 
 # ===== Labels =====
 
@@ -84,25 +86,31 @@ class UserMiniSerializer(serializers.Serializer):
 # ===== Messages =====
 
 class MessageSerializer(serializers.ModelSerializer):
-    # совместимость/удобство
+    # Информация об авторе
     author_username = serializers.CharField(
         source="author.username", allow_null=True, read_only=True
     )
     author = serializers.SerializerMethodField()
-    author_id = serializers.IntegerField(source="author_id", read_only=True)
+    # ВАЖНО: без source='author_id', иначе DRF кидает AssertionError
+    author_id = serializers.SerializerMethodField()
 
+    # Вложение
     attachment_url = serializers.SerializerMethodField()
     is_image = serializers.SerializerMethodField()
+    # meta гарантированно содержит хотя бы mime
+    meta = serializers.SerializerMethodField()
+
+    # Удобный флаг для фронта
     is_own = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
         fields = [
             "id",
-            "room",                 # в публичных чатах можно прислать room
+            "room",                 # для публичных чатов — int PK
             "author",               # mini {id, nickname, avatar}
             "author_id",
-            "author_username",      # совместимость
+            "author_username",
             "display_name",
             "content",
             "attachment",
@@ -129,10 +137,14 @@ class MessageSerializer(serializers.ModelSerializer):
             "attachment_url",
             "is_image",
             "is_own",
+            "meta",
         ]
+        # В ЛС room может выставляться сервером — не требуем на входе
         extra_kwargs = {
-            "room": {"required": False, "allow_null": True},  # ЛС создаём без room от клиента
+            "room": {"required": False, "allow_null": True},
         }
+
+    # ----- getters -----
 
     def get_author(self, obj) -> dict:
         user = obj.author
@@ -140,9 +152,15 @@ class MessageSerializer(serializers.ModelSerializer):
             return {"id": None, "nickname": obj.display_name or "Unknown", "avatar": None}
         return UserMiniSerializer(user, context=self.context).data
 
+    def get_author_id(self, obj) -> Optional[int]:
+        try:
+            return int(obj.author_id) if obj.author_id is not None else None
+        except Exception:
+            return None
+
     def get_is_own(self, obj) -> bool:
         request = self.context.get("request")
-        return bool(request and request.user and obj.author_id == request.user.id)
+        return bool(request and getattr(request, "user", None) and obj.author_id == request.user.id)
 
     def get_attachment_url(self, obj: Message) -> Optional[str]:
         req = self.context.get("request")
@@ -150,8 +168,51 @@ class MessageSerializer(serializers.ModelSerializer):
             return req.build_absolute_uri(obj.attachment.url) if req else obj.attachment.url
         return None
 
+    def _guess_mime(self, obj: Message) -> Optional[str]:
+        # пробуем взять из obj.meta, иначе по URL/имени файла
+        current = getattr(obj, "meta", {}) or {}
+        mime = current.get("mime")
+        if mime:
+            return mime
+        name = (getattr(obj, "attachment_name", None) or "").lower()
+        url = ""
+        att = getattr(obj, "attachment", None)
+        try:
+            url = (att.url or "").lower() if att and hasattr(att, "url") else ""
+        except Exception:
+            url = ""
+        src = url or name
+        return guess_type(src)[0]
+
+    def get_meta(self, obj: Message) -> dict[str, Any]:
+        meta = dict(getattr(obj, "meta", {}) or {})
+        mime = self._guess_mime(obj)
+        if mime and not meta.get("mime"):
+            meta["mime"] = mime
+        return meta
+
     def get_is_image(self, obj: Message) -> bool:
-        return obj.is_image
+        # 1) если модель даёт точный флаг — используем
+        if hasattr(obj, "is_image"):
+            try:
+                return bool(obj.is_image)
+            except Exception:
+                pass
+        # 2) иначе определяем по mime/расширению
+        mime = self._guess_mime(obj) or ""
+        if mime.startswith("image/"):
+            return True
+        name = (getattr(obj, "attachment_name", None) or "").lower()
+        url = ""
+        att = getattr(obj, "attachment", None)
+        try:
+            url = (att.url or "").lower() if att and hasattr(att, "url") else ""
+        except Exception:
+            url = ""
+        src = url or name
+        return src.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"))
+
+    # ----- validation -----
 
     def validate(self, attrs):
         content = (attrs.get("content") or "").strip()
@@ -208,11 +269,11 @@ class ConversationCreateSerializer(serializers.Serializer):
     other_user_id = serializers.IntegerField()
 
     def validate(self, attrs):
-      request = self.context["request"]
-      other_user_id = attrs["other_user_id"]
-      if request.user.id == other_user_id:
-          raise serializers.ValidationError("Нельзя создать диалог с самим собой.")
-      return attrs
+        request = self.context["request"]
+        other_user_id = attrs["other_user_id"]
+        if request.user.id == other_user_id:
+            raise serializers.ValidationError("Нельзя создать диалог с самим собой.")
+        return attrs
 
 
 # ===== Друзья / Блок =====
