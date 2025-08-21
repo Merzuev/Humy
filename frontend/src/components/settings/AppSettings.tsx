@@ -32,6 +32,17 @@ interface AppSettingsProps {
   onBack?: () => void;
 }
 
+/**
+ * ВАЖНО:
+ * Из локального состояния удалены:
+ *  - emailNotifications
+ *  - readReceipts
+ *  - enterToSend
+ *  - autoplayVideos
+ * Они скрыты в UI и не редактируются. Для совместимости с беком
+ * их прежние значения храню отдельно в fixedServerFields и отправляю
+ * неизменными в PUT (так как на бекенде partial=False).
+ */
 interface SettingsState {
   // Общие настройки
   language: string;
@@ -41,26 +52,20 @@ interface SettingsState {
   // Уведомления
   pushNotifications: boolean;
   soundNotifications: boolean;
-  emailNotifications: boolean;
   messageNotifications: boolean;
   groupNotifications: boolean;
   
   // Приватность
   profileVisibility: 'public' | 'friends' | 'private';
   onlineStatus: boolean;
-  readReceipts: boolean;
   lastSeen: boolean;
   
-  // Чат настройки
+  // Чат / медиа
   autoDownloadImages: boolean;
   autoDownloadVideos: boolean;
   autoDownloadDocuments: boolean;
-  enterToSend: boolean;
-  
-  // Медиа настройки
   cameraPermission: boolean;
   microphonePermission: boolean;
-  autoplayVideos: boolean;
   
   // Безопасность
   twoFactorAuth: boolean;
@@ -70,6 +75,11 @@ interface SettingsState {
   autoConnect: boolean;
   dataUsage: 'low' | 'medium' | 'high';
 }
+
+// Флаги скрытия секций по прежнему требованию:
+const HIDE_THEME_SECTION = true;
+const HIDE_FONT_SIZE_SECTION = true;
+const HIDE_DATA_STORAGE_SECTION = true;
 
 const LANGUAGE_OPTIONS = [
   { value: 'en', label: '🇺🇸 English' },
@@ -86,11 +96,6 @@ const LANGUAGE_OPTIONS = [
   { value: 'hi', label: '🇮🇳 हिन्दी' },
 ];
 
-// Флаги скрытия секций по твоему требованию:
-const HIDE_THEME_SECTION = true;
-const HIDE_FONT_SIZE_SECTION = true;
-const HIDE_DATA_STORAGE_SECTION = true;
-
 export function AppSettings({ onBack }: AppSettingsProps) {
   const { t, i18n } = useTranslation();
   const { logout, deleteAccount } = useUser();
@@ -102,43 +107,53 @@ export function AppSettings({ onBack }: AppSettingsProps) {
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Основные (оставшиеся) настройки
   const [settings, setSettings] = useState<SettingsState>({
-    // Общие настройки
     language: i18n.language,
     theme: 'dark',
     fontSize: 'medium',
-    
+
     // Уведомления
     pushNotifications: true,
     soundNotifications: true,
-    emailNotifications: false,
     messageNotifications: true,
     groupNotifications: true,
-    
+
     // Приватность
     profileVisibility: 'public',
     onlineStatus: true,
-    readReceipts: true,
     lastSeen: true,
-    
-    // Чат настройки
+
+    // Чат / медиа
     autoDownloadImages: true,
     autoDownloadVideos: false,
     autoDownloadDocuments: false,
-    enterToSend: true,
-    
-    // Медиа настройки
     cameraPermission: true,
     microphonePermission: true,
-    autoplayVideos: false,
-    
+
     // Безопасность
     twoFactorAuth: false,
     sessionTimeout: 30,
-    
+
     // Сеть
     autoConnect: true,
     dataUsage: 'medium'
+  });
+
+  /**
+   * Значения удалённых фич, которые бек всё ещё ожидает получать при PUT (partial=False).
+   * Храним их отдельно и НЕ показываем в UI.
+   */
+  const [fixedServerFields, setFixedServerFields] = useState<{
+    email_notifications: boolean;
+    read_receipts: boolean;
+    enter_to_send: boolean;
+    autoplay_videos: boolean;
+  }>({
+    email_notifications: false,
+    read_receipts: true,
+    enter_to_send: true,
+    autoplay_videos: false,
   });
 
   // Загружаем настройки из API при монтировании
@@ -161,54 +176,50 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       setIsLoading(true);
       setError(null);
       
-      // ВАЖНО: без ведущего слэша, чтобы не срезать '/api' из baseURL
+      // ВАЖНО: без ведущего слэша, чтобы не срезать '/api' из baseURL (если baseURL без /api — у тебя уже здесь добавлено "api/")
       const response = await apiClient.get('api/users/settings/');
-      const serverSettings = response.data ?? {};
+      const s = response.data ?? {};
       
-      const transformedSettings: SettingsState = {
-        // General settings
-        language: serverSettings.language || i18n.language,
-        theme: serverSettings.theme || 'dark',
-        fontSize: serverSettings.font_size || 'medium',
-        
-        // Notifications
-        pushNotifications: serverSettings.push_notifications ?? true,
-        soundNotifications: serverSettings.sound_notifications ?? true,
-        emailNotifications: serverSettings.email_notifications ?? false,
-        messageNotifications: serverSettings.message_notifications ?? true,
-        groupNotifications: serverSettings.group_notifications ?? true,
-        
-        // Privacy
-        profileVisibility: serverSettings.profile_visibility || 'public',
-        onlineStatus: serverSettings.online_status ?? true,
-        readReceipts: serverSettings.read_receipts ?? true,
-        lastSeen: serverSettings.last_seen ?? true,
-        
-        // Chat settings
-        autoDownloadImages: serverSettings.auto_download_images ?? true,
-        autoDownloadVideos: serverSettings.auto_download_videos ?? false,
-        autoDownloadDocuments: serverSettings.auto_download_documents ?? false,
-        enterToSend: serverSettings.enter_to_send ?? true,
-        
-        // Media settings
-        cameraPermission: serverSettings.camera_permission ?? true,
-        microphonePermission: serverSettings.microphone_permission ?? true,
-        autoplayVideos: serverSettings.autoplay_videos ?? false,
-        
-        // Security
-        twoFactorAuth: serverSettings.two_factor_auth ?? false,
-        sessionTimeout: serverSettings.session_timeout || 30,
-        
-        // Network
-        autoConnect: serverSettings.auto_connect ?? true,
-        dataUsage: serverSettings.data_usage || 'medium'
+      // Заполняем видимые настройки
+      const next: SettingsState = {
+        language: s.language || i18n.language,
+        theme: s.theme || 'dark',
+        fontSize: s.font_size || 'medium',
+
+        pushNotifications: s.push_notifications ?? true,
+        soundNotifications: s.sound_notifications ?? true,
+        messageNotifications: s.message_notifications ?? true,
+        groupNotifications: s.group_notifications ?? true,
+
+        profileVisibility: s.profile_visibility || 'public',
+        onlineStatus: s.online_status ?? true,
+        lastSeen: s.last_seen ?? true,
+
+        autoDownloadImages: s.auto_download_images ?? true,
+        autoDownloadVideos: s.auto_download_videos ?? false,
+        autoDownloadDocuments: s.auto_download_documents ?? false,
+        cameraPermission: s.camera_permission ?? true,
+        microphonePermission: s.microphone_permission ?? true,
+
+        twoFactorAuth: s.two_factor_auth ?? false,
+        sessionTimeout: s.session_timeout || 30,
+
+        autoConnect: s.auto_connect ?? true,
+        dataUsage: s.data_usage || 'medium'
       };
-      
-      setSettings(transformedSettings);
+      setSettings(next);
+
+      // Запоминаем невидимые, но требуемые сервером поля — без изменений
+      setFixedServerFields({
+        email_notifications: s.email_notifications ?? false,
+        read_receipts: s.read_receipts ?? true,
+        enter_to_send: s.enter_to_send ?? true,
+        autoplay_videos: s.autoplay_videos ?? false,
+      });
       
       // Применяем язык сразу
-      if (transformedSettings.language && transformedSettings.language !== i18n.language) {
-        i18n.changeLanguage(transformedSettings.language);
+      if (next.language && next.language !== i18n.language) {
+        i18n.changeLanguage(next.language);
       }
     } catch (err: any) {
       if (err?.response?.status === 404) {
@@ -227,34 +238,38 @@ export function AppSettings({ onBack }: AppSettingsProps) {
       setError(null);
       setSaveSuccess(false);
       
-      // Тело для сервера (snake_case)
+      // Тело для сервера (snake_case).
+      // ВАЖНО: добавляем fixedServerFields, чтобы сервер не ругался на отсутствие удалённых полей.
       const serverSettings = {
         language: settings.language,
         theme: settings.theme,
         font_size: settings.fontSize,
+
         push_notifications: settings.pushNotifications,
         sound_notifications: settings.soundNotifications,
-        email_notifications: settings.emailNotifications,
         message_notifications: settings.messageNotifications,
         group_notifications: settings.groupNotifications,
+
         profile_visibility: settings.profileVisibility,
         online_status: settings.onlineStatus,
-        read_receipts: settings.readReceipts,
         last_seen: settings.lastSeen,
+
         auto_download_images: settings.autoDownloadImages,
         auto_download_videos: settings.autoDownloadVideos,
         auto_download_documents: settings.autoDownloadDocuments,
-        enter_to_send: settings.enterToSend,
         camera_permission: settings.cameraPermission,
         microphone_permission: settings.microphonePermission,
-        autoplay_videos: settings.autoplayVideos,
+
         two_factor_auth: settings.twoFactorAuth,
         session_timeout: settings.sessionTimeout,
+
         auto_connect: settings.autoConnect,
-        data_usage: settings.dataUsage
+        data_usage: settings.dataUsage,
+
+        // Невидимые поля — отправляем как есть, без изменений
+        ...fixedServerFields,
       };
       
-      // ВАЖНО: без ведущего слэша
       await apiClient.put('api/users/settings/', serverSettings);
       
       setSaveSuccess(true);
@@ -274,8 +289,6 @@ export function AppSettings({ onBack }: AppSettingsProps) {
 
   const updateSetting = <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => {
     setSettings(prev => ({ ...prev, [key]: value }));
-    
-    // Мгновенная смена языка
     if (key === 'language') {
       i18n.changeLanguage(value as string);
     }
@@ -283,33 +296,35 @@ export function AppSettings({ onBack }: AppSettingsProps) {
   };
 
   const handleReset = () => {
-    const defaultSettings: SettingsState = {
+    // Сбрасываем ТОЛЬКО видимые настройки. Невидимые остаются как были на сервере.
+    const def: SettingsState = {
       language: 'en',
       theme: 'dark',
       fontSize: 'medium',
+
       pushNotifications: true,
       soundNotifications: true,
-      emailNotifications: false,
       messageNotifications: true,
       groupNotifications: true,
+
       profileVisibility: 'public',
       onlineStatus: true,
-      readReceipts: true,
       lastSeen: true,
+
       autoDownloadImages: true,
       autoDownloadVideos: false,
       autoDownloadDocuments: false,
-      enterToSend: true,
       cameraPermission: true,
       microphonePermission: true,
-      autoplayVideos: false,
+
       twoFactorAuth: false,
       sessionTimeout: 30,
+
       autoConnect: true,
       dataUsage: 'medium'
     };
     
-    setSettings(defaultSettings);
+    setSettings(def);
     setShowResetConfirm(false);
     saveSettings();
   };
@@ -621,13 +636,8 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                   description={t('settings.soundNotificationsDesc', 'Воспроизводить звуки при получении сообщений')}
                 />
                 
-                <ToggleSwitch
-                  enabled={settings.emailNotifications}
-                  onChange={(value) => updateSetting('emailNotifications', value)}
-                  label={t('settings.emailNotifications', 'Email уведомления')}
-                  description={t('settings.emailNotificationsDesc', 'Получать уведомления на почту')}
-                />
-                
+                {/* Email-уведомления удалены */}
+
                 <ToggleSwitch
                   enabled={settings.messageNotifications}
                   onChange={(value) => updateSetting('messageNotifications', value)}
@@ -660,7 +670,6 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                 {/* Видимость профиля */}
                 <div className="p-3 sm:p-4 bg-white/5 rounded-lg sm:rounded-xl border border-white/20">
                   <label className="block text-white font-medium mb-3 flex items-center text-sm sm:text-base">
-                    {/* простая иконка "глаз" заменена на SVG в ранней версии — оставим без зависимостей */}
                     <svg className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-blue-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5c-7 0-10 7-10 7s3 7 10 7 10-7 10-7-3-7-10-7zm0 12c-2.761 0-5-2.239-5-5 0-2.762 2.239-5 5-5s5 2.238 5 5c0 2.761-2.239 5-5 5zm0-8a3 3 0 100 6 3 3 0 000-6z"/></svg>
                     {t('settings.profileVisibility', 'Видимость профиля')}
                   </label>
@@ -693,13 +702,8 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                   description={t('settings.onlineStatusDesc', 'Другие пользователи смогут видеть, когда вы в сети')}
                 />
                 
-                <ToggleSwitch
-                  enabled={settings.readReceipts}
-                  onChange={(value) => updateSetting('readReceipts', value)}
-                  label={t('settings.readReceipts', 'Уведомления о прочтении')}
-                  description={t('settings.readReceiptsDesc', 'Отправлять подтверждения о прочтении сообщений')}
-                />
-                
+                {/* Уведомления о прочтении — удалены */}
+
                 <ToggleSwitch
                   enabled={settings.lastSeen}
                   onChange={(value) => updateSetting('lastSeen', value)}
@@ -750,12 +754,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                   description={t('settings.autoDownloadDocumentsDesc', 'Автоматически загружать документы и файлы')}
                 />
                 
-                <ToggleSwitch
-                  enabled={settings.enterToSend}
-                  onChange={(value) => updateSetting('enterToSend', value)}
-                  label={t('settings.enterToSend', 'Enter для отправки')}
-                  description={t('settings.enterToSendDesc', 'Отправлять сообщения по нажатию Enter')}
-                />
+                {/* Enter для отправки — удалён */}
                 
                 <ToggleSwitch
                   enabled={settings.cameraPermission}
@@ -771,12 +770,7 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                   description={t('settings.microphonePermissionDesc', 'Разрешить использование микрофона для звонков')}
                 />
                 
-                <ToggleSwitch
-                  enabled={settings.autoplayVideos}
-                  onChange={(value) => updateSetting('autoplayVideos', value)}
-                  label={t('settings.autoplayVideos', 'Автовоспроизведение видео')}
-                  description={t('settings.autoplayVideosDesc', 'Автоматически воспроизводить видео в чатах')}
-                />
+                {/* Автовоспроизведение видео — удалено */}
               </div>
             </div>
 
@@ -799,7 +793,6 @@ export function AppSettings({ onBack }: AppSettingsProps) {
                       <Zap className="w-3 h-3 sm:w-4 sm:h-4 mr-2 text-yellow-400" />
                       {t('settings.dataUsage', 'Использование данных')}
                     </label>
-                    {/* скрытая реализация */}
                   </div>
                 </div>
               </div>

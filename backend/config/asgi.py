@@ -1,77 +1,82 @@
-# config/asgi.py
 import os
-from django.core.asgi import get_asgi_application
-from channels.routing import ProtocolTypeRouter, URLRouter
 
+# 1) Настраиваем Django до любых импортов из django.*
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
-django_asgi_app = get_asgi_application()
-
-# ===== JWT-аутентификация для WebSocket =====
-# Каналы по умолчанию аутентифицируют по cookie-сессии (AuthMiddlewareStack),
-# а у тебя фронт подключается с JWT (?token=...). Добавляем middleware,
-# который достаёт токен из query string и подставляет scope['user'].
+import django
+django.setup()
 
 from urllib.parse import parse_qs
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
-from channels.db import database_sync_to_async
-from rest_framework_simplejwt.tokens import AccessToken
 
-class JWTAuthMiddleware:
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
+from channels.auth import AuthMiddlewareStack
+from channels.db import database_sync_to_async
+from django.core.asgi import get_asgi_application
+from django.contrib.auth.models import AnonymousUser
+from django.urls import path
+
+# Наш консюмер уведомлений
+from notifications.consumers import NotificationsConsumer
+
+# SimpleJWT для валидации токена
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+
+# ===== JWT через query-string для WebSocket =====
+class QueryStringJWTAuthMiddleware:
     """
-    Middleware для Django Channels:
-    - ищет JWT в ?token=... или ?authorization=Bearer <token>
-    - валидирует его через DRF SimpleJWT
-    - пишет пользователя в scope['user']
+    Достаём ?token=<JWT> из query-string и аутентифицируем пользователя для WS.
+    Если токена нет/невалиден — оставляем AnonymousUser.
     """
+
     def __init__(self, inner):
         self.inner = inner
+        self.jwt_auth = JWTAuthentication()
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") != "websocket":
-            return await self.inner(scope, receive, send)
+        # Если уже есть user (например, сессия) — оставим, иначе попробуем по token
+        user = scope.get("user", AnonymousUser())
+        if not getattr(user, "is_authenticated", False):
+            token = None
+            try:
+                qs = parse_qs((scope.get("query_string") or b"").decode())
+                token = (qs.get("token") or [None])[0]
+            except Exception:
+                token = None
+            user = await self._get_user_from_token(token)
 
-        scope["user"] = await self._get_user(scope)
+        scope["user"] = user or AnonymousUser()
         return await self.inner(scope, receive, send)
 
     @database_sync_to_async
-    def _get_user(self, scope):
+    def _get_user_from_token(self, token_str):
+        if not token_str:
+            return AnonymousUser()
         try:
-            raw_qs = (scope.get("query_string") or b"").decode()
-            qs = parse_qs(raw_qs)
-
-            token = None
-            if "token" in qs and qs["token"]:
-                token = qs["token"][0]
-            elif "authorization" in qs and qs["authorization"]:
-                auth = qs["authorization"][0]
-                if auth.lower().startswith("bearer "):
-                    token = auth.split(" ", 1)[1].strip()
-
-            if not token:
-                return AnonymousUser()
-
-            access = AccessToken(token)
-            user_id = access.get("user_id") or access.get("id")
-            if not user_id:
-                return AnonymousUser()
-
-            User = get_user_model()
-            try:
-                return User.objects.get(pk=user_id)
-            except User.DoesNotExist:
-                return AnonymousUser()
+            validated = self.jwt_auth.get_validated_token(token_str)
+            return self.jwt_auth.get_user(validated)
         except Exception:
             return AnonymousUser()
 
-# Роуты WS
-import chat.routing  # noqa: E402
 
+def JWTAuthMiddlewareStack(inner):
+    # Сочетаем стандартный AuthMiddlewareStack (сессия/cookies)
+    # и наш QueryStringJWTAuthMiddleware (JWT через ?token)
+    return QueryStringJWTAuthMiddleware(AuthMiddlewareStack(inner))
+
+
+# ===== WS-маршруты =====
+websocket_urlpatterns = [
+    path("ws/notifications/", NotificationsConsumer.as_asgi()),
+]
+
+# ===== ASGI-приложение =====
 application = ProtocolTypeRouter({
-    "http": django_asgi_app,
-    # Важно: используем JWTAuthMiddleware, а не AuthMiddlewareStack
-    "websocket": JWTAuthMiddleware(
-        URLRouter(chat.routing.websocket_urlpatterns)
+    "http": get_asgi_application(),
+    "websocket": AllowedHostsOriginValidator(
+        JWTAuthMiddlewareStack(
+            URLRouter(websocket_urlpatterns)
+        )
     ),
 })

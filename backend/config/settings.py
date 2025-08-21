@@ -31,7 +31,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
 
     # Third-party
-    "corsheaders",  # <-- оставляем ОДИН раз
+    "corsheaders",
     "channels",
     "rest_framework",
     "rest_framework.authtoken",
@@ -42,11 +42,11 @@ INSTALLED_APPS = [
     # Local apps
     "users",
     "chat",
-    "notifications",  # <-- добавили приложение нотификаций (WS /ws/notifications/)
+    "notifications",  # WebSocket уведомления
 ]
 
 # ---------------- Middleware ----------------
-# ВАЖНО: CorsMiddleware должен быть как можно выше, ОБЯЗАТЕЛЬНО перед CommonMiddleware
+# ВАЖНО: CorsMiddleware должен быть выше CommonMiddleware
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -56,24 +56,22 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Обновляем last_activity при HTTP-запросах
+    "users.middleware.LastActivityMiddleware",
 ]
 
 # ---------------- CORS/CSRF (dev) ----------------
-# В деве лучше явно перечислять источники фронтенда
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-CORS_ALLOW_CREDENTIALS = True  # если используешь куки/сессию; с JWT не обязательно, но не мешает
+CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
     "content-type",
 ]
-
-# Если хочется на время открыть всё (НЕ делай так в проде):
-# CORS_ALLOW_ALL_ORIGINS = True
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
@@ -99,7 +97,7 @@ TEMPLATES = [
     },
 ]
 
-# Веб обслуживает ASGI (Channels), WSGI оставляем для админки/скриптов
+# HTTP обслуживает WSGI (админка/скрипты), WebSocket — ASGI/Channels
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
