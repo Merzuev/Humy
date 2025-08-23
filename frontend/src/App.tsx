@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { UserProvider } from './contexts/UserContext';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
@@ -212,6 +212,58 @@ function ProtectedArea({ children }: { children: React.ReactNode }) {
   );
 }
 
+// ==== Вынесенные роуты с ключом по location (стабилизирует reconciliation) ====
+function AppRoutes() {
+  const location = useLocation();
+  return (
+    <Suspense fallback={<LoadingSpinner />}>
+      <Routes location={location} key={location.pathname}>
+        {/* Публичные без SettingsProvider */}
+        <Route
+          path="/login"
+          element={
+            <ErrorBoundary>
+              <LoginForm />
+            </ErrorBoundary>
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            <ErrorBoundary>
+              <RegisterForm />
+            </ErrorBoundary>
+          }
+        />
+        <Route
+          path="/setup-profile"
+          element={
+            <ErrorBoundary>
+              <ProfileSetupForm />
+            </ErrorBoundary>
+          }
+        />
+
+        {/* Защищённая зона */}
+        <Route
+          path="/dashboard"
+          element={
+            <ErrorBoundary>
+              <ProtectedRoute>
+                <ProtectedArea>
+                  <MainDashboard />
+                </ProtectedArea>
+              </ProtectedRoute>
+            </ErrorBoundary>
+          }
+        />
+
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    </Suspense>
+  );
+}
+
 function App() {
   const { i18n } = useTranslation();
 
@@ -242,51 +294,7 @@ function App() {
     >
       <UserProvider>
         <Router>
-          <Suspense fallback={<LoadingSpinner />}>
-            <Routes>
-              {/* Публичные без SettingsProvider */}
-              <Route
-                path="/login"
-                element={
-                  <ErrorBoundary>
-                    <LoginForm />
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/register"
-                element={
-                  <ErrorBoundary>
-                    <RegisterForm />
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/setup-profile"
-                element={
-                  <ErrorBoundary>
-                    <ProfileSetupForm />
-                  </ErrorBoundary>
-                }
-              />
-
-              {/* Защищённая зона */}
-              <Route
-                path="/dashboard"
-                element={
-                  <ErrorBoundary>
-                    <ProtectedRoute>
-                      <ProtectedArea>
-                        <MainDashboard />
-                      </ProtectedArea>
-                    </ProtectedRoute>
-                  </ErrorBoundary>
-                }
-              />
-
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            </Routes>
-          </Suspense>
+          <AppRoutes />
         </Router>
       </UserProvider>
     </ErrorBoundary>

@@ -13,6 +13,7 @@ urlpatterns = [
     # API
     path('api/', include('users.urls')),  # Пользователи
     path('api/', include('chat.urls')),   # Чаты и сообщения
+    path("", include("notifications.urls")), 
 ]
 
 # Медиафайлы (аватары и т.п.)

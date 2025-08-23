@@ -16,8 +16,14 @@ from django.core.asgi import get_asgi_application
 from django.contrib.auth.models import AnonymousUser
 from django.urls import path
 
-# Наш консюмер уведомлений
+# === Консьюмеры WebSocket ===
 from notifications.consumers import NotificationsConsumer
+
+# Пытаемся подключить чат мягко, чтобы не ломать проект, если chat ещё не готов
+try:
+    from chat.consumers import ChatConsumer  # ws://.../ws/chat/<room_id>/
+except Exception:
+    ChatConsumer = None  # чат будет пропущен в маршрутах
 
 # SimpleJWT для валидации токена
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -68,8 +74,16 @@ def JWTAuthMiddlewareStack(inner):
 
 # ===== WS-маршруты =====
 websocket_urlpatterns = [
+    # Уведомления: ws://<host>/ws/notifications/?token=...
     path("ws/notifications/", NotificationsConsumer.as_asgi()),
 ]
+
+# Добавим чат, только если он доступен (чтобы ничего не падало)
+if ChatConsumer is not None:
+    # ЧАТ: ws://<host>/ws/chat/<room_id>/?token=...
+    websocket_urlpatterns.append(
+        path("ws/chat/<int:room_id>/", ChatConsumer.as_asgi())
+    )
 
 # ===== ASGI-приложение =====
 application = ProtocolTypeRouter({

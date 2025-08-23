@@ -42,7 +42,8 @@ INSTALLED_APPS = [
     # Local apps
     "users",
     "chat",
-    "notifications",  # WebSocket уведомления
+    # важно: используем AppConfig, чтобы сработал ready() и подключились интеграции
+    "notifications.apps.NotificationsConfig",
 ]
 
 # ---------------- Middleware ----------------
@@ -173,6 +174,15 @@ else:
         }
     }
 
+# ---------------- Notifications integrations ----------------
+# Эти значения можно переопределить в .env; если пусто/не найдено — интеграция тихо пропускается.
+# Для твоего проекта я ставлю безопасные дефолты:
+#  - групповые сообщения: вероятно модель в app "chat" называется "Message" (используется /api/messages/)
+#  - ЛС и заявки в друзья можно выставить позже, когда уточним реальные модели
+HUMY_GROUP_MESSAGE_MODEL = env("HUMY_GROUP_MESSAGE_MODEL", default="chat.Message")
+HUMY_DM_MESSAGE_MODEL = env("HUMY_DM_MESSAGE_MODEL", default="")              # пример: "chat.DirectMessage"
+HUMY_FRIEND_REQUEST_MODEL = env("HUMY_FRIEND_REQUEST_MODEL", default="")      # пример: "users.FriendRequest"
+
 # ---------------- Logging (диагностика) ----------------
 LOGGING = {
     "version": 1,
@@ -183,5 +193,7 @@ LOGGING = {
         "django": {"handlers": ["console"], "level": "INFO"},
         "channels": {"handlers": ["console"], "level": "INFO"},
         "daphne": {"handlers": ["console"], "level": "INFO"},
+        # лог уведомлений/интеграций
+        "notifications": {"handlers": ["console"], "level": "INFO"},
     },
 }

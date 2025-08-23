@@ -149,7 +149,6 @@ class MessageViewSet(viewsets.ModelViewSet):
             ct = (getattr(attachment_file, "content_type", "") or "").lower()
             if ct:
                 meta["mime"] = ct
-            # максимально бережно к модели: используем константы, если они есть
             if ct.startswith("image/"):
                 attachment_type = getattr(Message, "ATTACHMENT_TYPE_IMAGE", "image")
             elif ct.startswith("audio/") and hasattr(Message, "ATTACHMENT_TYPE_AUDIO"):
@@ -254,6 +253,24 @@ class ConversationsViewSet(viewsets.GenericViewSet,
         data = ConversationSerializer(chat, context={"request": request}).data
         return Response(data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
+    @action(detail=False, methods=["get"], url_path=r'with/(?P<user_id>\d+)')
+    def with_user(self, request, user_id: str = ""):
+        """
+        GET /api/conversations/with/<user_id>/
+        Возвращает (или создаёт) приватный диалог с пользователем.
+        """
+        other_user = get_object_or_404(User, pk=int(user_id))
+
+        if block_exists(request.user, other_user):
+            return Response({"detail": "Пользователь недоступен для диалога."}, status=status.HTTP_403_FORBIDDEN)
+
+        if getattr(settings, "FRIENDS_REQUIRED_FOR_DM", False) and not are_friends(request.user, other_user):
+            return Response({"detail": "Личные сообщения доступны только между друзьями."}, status=status.HTTP_403_FORBIDDEN)
+
+        chat, created = get_or_create_private_chat(request.user, other_user)
+        data = ConversationSerializer(chat, context={"request": request}).data
+        return Response(data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
     def retrieve(self, request, *args, **kwargs):
         chat = get_object_or_404(self.get_queryset(), pk=kwargs["pk"])
         ser = ConversationSerializer(chat, context={"request": request})
@@ -335,146 +352,59 @@ class ConversationMessagesView(generics.ListCreateAPIView):
             serializer.is_valid(raise_exception=True)
         except ValidationError as exc:
             if isinstance(exc.detail, dict) and "room" in exc.detail:
-                serializer = self.get_serializer(data=data, context={"request": request}, partial=True)
-                serializer.is_valid(raise_exception=True)
+                # если фронт не прислал room — мы уже подставили
+                pass
             else:
                 raise
 
-        # вычисляем attachment_* и meta.mime (для аудио/видео/фото)
-        attachment_file = request.FILES.get("attachment")
-        attachment_type = ""
-        attachment_name = ""
-        meta: dict[str, Any] = {}
-
-        if attachment_file:
-            ct = (getattr(attachment_file, "content_type", "") or "").lower()
-            if ct:
-                meta["mime"] = ct
-            if ct.startswith("image/"):
-                attachment_type = getattr(Message, "ATTACHMENT_TYPE_IMAGE", "image")
-            elif ct.startswith("audio/") and hasattr(Message, "ATTACHMENT_TYPE_AUDIO"):
-                attachment_type = getattr(Message, "ATTACHMENT_TYPE_AUDIO")
-            elif ct.startswith("video/") and hasattr(Message, "ATTACHMENT_TYPE_VIDEO"):
-                attachment_type = getattr(Message, "ATTACHMENT_TYPE_VIDEO")
-            else:
-                attachment_type = getattr(Message, "ATTACHMENT_TYPE_FILE", "file")
-            attachment_name = getattr(attachment_file, "name", "") or ""
-
-        # создаём сообщение
-        msg: Message = serializer.save(
-            room=chat,
-            author=request.user,
-            attachment_type=attachment_type,
-            attachment_name=attachment_name,
-            meta=meta or {},
-        )
+        msg: Message = serializer.save()
         maybe_set_expires_at(msg)
-
-        # обновляем last_message + unread
-        chat.last_message = msg
-        chat.save(update_fields=["last_message"])
         inc_unread_for_others(chat, request.user)
 
-        # WS в открытую комнату
-        try:
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                f"chat_{chat.id}",
-                {
-                    "type": "chat_message",
-                    "message": MessageSerializer(msg, context={"request": request}).data,
-                },
-            )
-        except Exception:
-            pass
+        # обновим last_message у чата
+        Chat.objects.filter(pk=chat.id).update(last_message=msg)
 
-        # уведомление собеседнику для списка диалогов
-        try:
-            other = _other_participant(chat, request.user)
-            if other:
-                att_kind = None
-                att_name = getattr(msg, "attachment_name", None) or ""
-                att_type = (getattr(msg, "attachment_type", "") or "").lower()
-                mime = ""
-                if isinstance(getattr(msg, "meta", None), dict):
-                    mime = (msg.meta.get("mime") or "").lower()
-
-                if att_type:
-                    if "image" in att_type:
-                        att_kind = "image"
-                    elif "audio" in att_type:
-                        att_kind = "audio"
-                    elif "video" in att_type:
-                        att_kind = "video"
-                    else:
-                        att_kind = "file"
-                elif mime:
-                    if mime.startswith("image/"):
-                        att_kind = "image"
-                    elif mime.startswith("audio/"):
-                        att_kind = "audio"
-                    elif mime.startswith("video/"):
-                        att_kind = "video"
-                    else:
-                        att_kind = "file"
-
-                notify_user(
-                    other.id,
-                    type="dm_badge",
-                    chat_id=chat.id,
-                    last_message=(msg.content or att_name or "Вложение"),
-                    last_message_is_own=False,
-                    last_message_created_at=getattr(msg, "created_at", None),
-                    attachment_kind=att_kind,
-                    attachment_name=att_name or None,
-                    attachment_mime=mime or None,
-                )
-        except Exception:
-            pass
-
-        return Response(
-            MessageSerializer(msg, context={"request": request}).data,
-            status=status.HTTP_201_CREATED
+        # realtime оповещение комнаты
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"chat_{chat.id}",
+            {
+                "type": "chat_message",
+                "data": MessageSerializer(msg, context={"request": request}).data,
+            },
         )
 
+        return Response(MessageSerializer(msg, context={"request": request}).data, status=201)
 
-# ======================= FRIENDS / BLOCK =======================
 
-class FriendRequestViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
+# ======================= FRIEND REQUESTS =======================
+
+class FriendRequestViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
-    serializer_class = FriendRequestSerializer
 
-    def get_queryset(self):
-        u = self.request.user
-        qs = FriendRequest.objects.filter(Q(from_user=u) | Q(to_user=u)).select_related("from_user", "to_user")
-        typ = (self.request.query_params.get("type") or "all").lower()
-        if typ == "incoming":
-            qs = qs.filter(to_user=u)
-        elif typ == "outgoing":
-            qs = qs.filter(from_user=u)
-        return qs.order_by("-created_at")
+    def list(self, request):
+        qs = FriendRequest.objects.filter(
+            Q(from_user=request.user) | Q(to_user=request.user)
+        ).select_related("from_user", "to_user").order_by("-created_at")
+        return Response(FriendRequestSerializer(qs, many=True, context={"request": request}).data)
 
-    def create(self, request, *args, **kwargs):
-        ser = FriendRequestCreateSerializer(data=request.data, context={"request": request})
+    def create(self, request):
+        ser = FriendRequestCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         to_user = get_object_or_404(User, pk=ser.validated_data["to_user_id"])
 
         if block_exists(request.user, to_user):
-            return Response({"detail": "Вы не можете отправить заявку этому пользователю."}, status=403)
-
-        if are_friends(request.user, to_user):
-            return Response({"detail": "Вы уже друзья."}, status=200)
+            return Response({"detail": "Пользователь недоступен."}, status=403)
 
         fr = send_friend_request(request.user, to_user)
         out = FriendRequestSerializer(fr, context={"request": request}).data
-
         try:
-            from_name = getattr(request.user, "nickname", None) or request.user.get_username()
+            me_name = getattr(request.user, "nickname", None) or request.user.get_username()
             notify_user(
-                fr.to_user_id,
+                to_user.id,
                 type="friend_request",
-                from_user_id=request.user.id,
-                from_user_name=from_name,
+                user_id=request.user.id,
+                user_name=me_name,
                 request_id=fr.id,
                 created_at=getattr(fr, "created_at", None),
             )

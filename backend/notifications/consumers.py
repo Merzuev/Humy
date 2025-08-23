@@ -9,7 +9,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from notifications.utils import a_notify_friends_ids  # ← АСИНХРОННЫЙ хелпер!
+from notifications.utils import a_notify_friends_ids
 
 User = get_user_model()
 
@@ -17,11 +17,9 @@ User = get_user_model()
 class NotificationsConsumer(AsyncJsonWebsocketConsumer):
     """
     Индивидуальные уведомления пользователю:
-      - friend:request  (пришла заявка в друзья)
-      - friend:accept   (заявку приняли)
-      - dm:badge        (новое ЛС — обновить карточку + бейдж)
-      - dm:read         (собеседник прочитал)
-      - presence        (изменение онлайн-статуса друга)
+      - friend:request, friend:accept
+      - dm:badge, dm:read
+      - presence
     """
     OFFLINE_DELAY_SEC = 20
 
@@ -39,6 +37,11 @@ class NotificationsConsumer(AsyncJsonWebsocketConsumer):
             if self.channel_layer:
                 await self.channel_layer.group_add(self.user_group, self.channel_name)
             await self.accept()
+
+            # начальная мета-информация
+            unread_count = await _get_unread_count(self.user_id)
+            await self.send_json({"kind": "meta:init", "unread_count": unread_count})
+
             await self._safe_set_presence(True)
         except Exception:
             try:
@@ -56,22 +59,33 @@ class NotificationsConsumer(AsyncJsonWebsocketConsumer):
         if getattr(self, "user_id", None):
             self._offline_task = asyncio.create_task(self._delayed_offline_safe())
 
-    # ===== group handlers =====
+    # ===== group handlers (все приводим к единому формату) =====
 
     async def friend_request(self, event):
-        await self.send_json({"type": "friend:request", **{k: v for k, v in event.items() if k != "type"}})
+        await self._send_event("friend.request", event)
 
     async def friend_accept(self, event):
-        await self.send_json({"type": "friend:accept", **{k: v for k, v in event.items() if k != "type"}})
+        await self._send_event("friend.accept", event)
 
     async def dm_badge(self, event):
-        await self.send_json({"type": "dm:badge", **{k: v for k, v in event.items() if k != "type"}})
+        await self._send_event("dm.badge", event)
 
     async def dm_read(self, event):
-        await self.send_json({"type": "dm:read", **{k: v for k, v in event.items() if k != "type"}})
+        await self._send_event("dm.read", event)
 
     async def presence(self, event):
-        await self.send_json({"type": "presence", **{k: v for k, v in event.items() if k != "type"}})
+        await self._send_event("presence", event)
+
+    async def _send_event(self, event_type: str, event: dict):
+        payload = {k: v for k, v in event.items() if k != "type"}
+        unread_count = await _get_unread_count(self.user_id)
+        message = {
+            "kind": "notification",
+            "type": event_type,
+            "unread_count": unread_count,
+            "payload": payload,
+        }
+        await self.send_json(message)
 
     # ===== internal safe wrappers =====
 
@@ -91,24 +105,17 @@ class NotificationsConsumer(AsyncJsonWebsocketConsumer):
             return
 
     async def _set_presence(self, online: bool):
-        """
-        Ставит отметку активности в базе (если поле есть) и оповещает друзей
-        через их user_<id> группы (type="presence"), только если приватность разрешает.
-        """
         user_id = self.user_id
 
         if online and self._offline_task and not self._offline_task.done():
             self._offline_task.cancel()
 
-        # Обновим last_activity (если поле есть)
         await _update_user_activity(user_id)
 
-        # Разошлём presence друзьям ТОЛЬКО если пользователь разрешил показывать онлайн
         can_broadcast = await _can_broadcast_presence(user_id)
         if can_broadcast:
             friend_ids = await _get_friend_ids(user_id)
             if friend_ids:
-                # ВАЖНО: здесь используем АСИНХРОННЫЙ хелпер
                 await a_notify_friends_ids(
                     friend_ids,
                     type="presence",
@@ -145,9 +152,6 @@ def _can_broadcast_presence(user_id: int) -> bool:
 
 @sync_to_async
 def _get_friend_ids(user_id: int) -> list[int]:
-    """
-    Вернёт id всех друзей. Если модели дружбы нет — вернёт пустой список.
-    """
     try:
         from chat.models import Friendship
     except Exception:
@@ -155,3 +159,12 @@ def _get_friend_ids(user_id: int) -> list[int]:
     qs = Friendship.objects.filter(user1_id=user_id).values_list("user2_id", flat=True)
     qs2 = Friendship.objects.filter(user2_id=user_id).values_list("user1_id", flat=True)
     return list(qs) + list(qs2)
+
+
+@sync_to_async
+def _get_unread_count(user_id: int) -> int:
+    try:
+        from notifications.models import Notification
+        return Notification.objects.filter(user_id=user_id, is_read=False).count()
+    except Exception:
+        return 0

@@ -1,4 +1,7 @@
 // src/components/messages/PersonalMessages.tsx
+// Обновлено: надёжный старт приватного диалога + автообновление списка
+// + устранение дублей сообщений (склейка по tempId/temp_id и мягкая дедупликация)
+
 import React, {
   useState,
   useEffect,
@@ -37,7 +40,7 @@ import FriendRequestsModal from "./FriendRequestsModal";
 /* ===================== Типы ===================== */
 
 export type Contact = {
-  id: number;
+  id: number; // ВАЖНО: здесь — id диалога (conversation), не userId
   name: string;
   avatar?: string | null;
   lastMessage?: string | null;
@@ -534,6 +537,9 @@ export const PersonalChatInterface: React.FC<{
   const lastRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  // Защита от повторной вставки server-id
+  const seenIdsRef = useRef<Set<string>>(new Set());
+
   const [lbOpen, setLbOpen] = useState(false);
   const [lbItems, setLbItems] = useState<LightboxItem[]>([]);
   const [lbIndex, setLbIndex] = useState(0);
@@ -570,6 +576,7 @@ export const PersonalChatInterface: React.FC<{
 
   useEffect(() => {
     setMessages([]);
+    seenIdsRef.current.clear();
     loadInitial();
   }, [contact.id, loadInitial]);
 
@@ -598,29 +605,93 @@ export const PersonalChatInterface: React.FC<{
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
+    ws.onopen = () => {
+      try {
+        ws.send(JSON.stringify({ type: "ping" }));
+        const joinPayloads = [
+          { type: "subscribe", room: contact.id },
+          { type: "join", room: contact.id },
+          { type: "room:join", room: contact.id },
+        ];
+        for (const p of joinPayloads) ws.send(JSON.stringify(p));
+      } catch {}
+    };
+
     ws.onmessage = (e) => {
       try {
         const payload = JSON.parse(e.data);
         const raw = payload?.data ?? payload;
-        const type = payload?.type ?? raw?.type;
+        const type = (payload?.type ?? raw?.type ?? "").toString();
 
-        if (type === "message") {
+        const looksLikeChatMessage =
+          /(^(chat\.)?message$|private\.message|room\.message)/i.test(type) ||
+          (raw && raw.id != null && (raw.content != null || raw.attachment_url));
+
+        if (type === "message" || looksLikeChatMessage) {
           const msgApi: MessageApi = raw as any;
           const ui = mapApiToUi(msgApi, currentUserId);
 
-          const tempId = (raw as any)?.tempId;
+          const serverId = String(ui.id ?? "");
+          if (serverId && seenIdsRef.current.has(serverId)) return;
+
+          // возможные ключи эха временного id
+          const tempEcho =
+            (raw as any)?.tempId ||
+            (raw as any)?.temp_id ||
+            (raw as any)?.client_id ||
+            (raw as any)?.clientId ||
+            (raw as any)?.echo_id;
+
           setMessages((prev) => {
-            if (tempId) {
-              const idx = prev.findIndex((m) => m.id === String(tempId));
+            // 1) Если пришёл tempEcho — заменить оптимистичное сообщение
+            if (tempEcho) {
+              const idx = prev.findIndex((m) => m.id === String(tempEcho));
               if (idx >= 0) {
                 const copy = prev.slice();
                 copy[idx] = ui;
+                if (serverId) seenIdsRef.current.add(serverId);
                 return copy;
               }
             }
-            if (prev.some((m) => m.id === ui.id)) return prev;
+
+            // 2) Если такое server-id уже есть — не добавлять
+            if (serverId && prev.some((m) => m.id === serverId)) {
+              seenIdsRef.current.add(serverId);
+              return prev;
+            }
+
+            // 3) Мягкая дедупликация: моё сообщение, такой же текст и время близко (±10с)
+            if (ui.isOwn && ui.content) {
+              const now = new Date(ui.createdAt || Date.now()).getTime();
+              const idxNear = prev.findIndex((m) =>
+                m.isOwn &&
+                !/^\d+$/.test(m.id) && // временное (не числовой id)
+                (m.content || "").trim() === (ui.content || "").trim() &&
+                Math.abs(new Date(m.createdAt).getTime() - now) < 10000
+              );
+              if (idxNear >= 0) {
+                const copy = prev.slice();
+                copy[idxNear] = ui;
+                if (serverId) seenIdsRef.current.add(serverId);
+                return copy;
+              }
+            }
+
+            // 4) Обычная вставка
+            if (serverId) seenIdsRef.current.add(serverId);
             return [...prev, ui];
           });
+
+          // Сообщим левому списку о новом сообщении
+          try {
+            window.dispatchEvent(new CustomEvent("humy:new-message", {
+              detail: {
+                conversationId: contact.id,
+                text: ui.content,
+                created_at: ui.createdAt,
+              }
+            }));
+          } catch {}
 
           const el = listRef.current;
           if (el) {
@@ -669,7 +740,8 @@ export const PersonalChatInterface: React.FC<{
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     try {
-      ws.send(JSON.stringify({ type: "message", content: text, tempId }));
+      // отправляем два ключа эха — tempId и temp_id (совместимость)
+      ws.send(JSON.stringify({ type: "message", content: text, tempId, temp_id: tempId }));
       return true;
     } catch {
       return false;
@@ -684,6 +756,13 @@ export const PersonalChatInterface: React.FC<{
       });
       const ui = mapApiToUi(res.data as MessageApi, currentUserId);
       setMessages((prev) => [...prev, ui]);
+
+      try {
+        window.dispatchEvent(new CustomEvent("humy:new-message", {
+          detail: { conversationId: contact.id, text: ui.content, created_at: ui.createdAt }
+        }));
+      } catch {}
+
       scrollToBottom("smooth");
     },
     [contact.id, currentUserId],
@@ -700,10 +779,10 @@ export const PersonalChatInterface: React.FC<{
       id: tempId,
       authorId: currentUserId,
       username:
-        user?.nickname ||
-        user?.display_name ||
-        user?.username ||
-        user?.email ||
+        (user as any)?.nickname ||
+        (user as any)?.display_name ||
+        (user as any)?.username ||
+        (user as any)?.email ||
         "User",
       content: text,
       createdAt: new Date().toISOString(),
@@ -718,7 +797,7 @@ export const PersonalChatInterface: React.FC<{
         setMessages((prev) => prev.filter((m) => m.id !== tempId));
         await postViaHTTP(text);
       } catch {
-        // show toast if needed
+        // можно показать toast
       }
     }
   }, [input, currentUserId, user, sendViaWS, postViaHTTP]);
@@ -738,6 +817,13 @@ export const PersonalChatInterface: React.FC<{
     });
     const ui = mapApiToUi(res.data as MessageApi, currentUserId);
     setMessages((prev) => [...prev, ui]);
+
+    try {
+      window.dispatchEvent(new CustomEvent("humy:new-message", {
+        detail: { conversationId: contact.id, text: ui.content || "📎 Вложение", created_at: ui.createdAt }
+      }));
+    } catch {}
+
     scrollToBottom("smooth");
   };
 
@@ -917,7 +1003,7 @@ export const PersonalChatInterface: React.FC<{
                 handleSend();
               }
             }}
-            className="flex-1 bg-white/10 border-white/20 text-white placeholder:text-white/60 focus:ring-white/30"
+            className="flex-1 bg-white/10 border-white/20 text-white placeholder:text白/60 focus:ring-white/30"
           />
 
           {input.trim().length === 0 ? (
@@ -1011,11 +1097,12 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
     const [isLoadingFriends, setIsLoadingFriends] = useState(false);
     const [friendsError, setFriendsError] = useState<string | null>(null);
 
-    // заявки/модалки (каркас)
+    // заявки/модалки
     const [showRequestsModal, setShowRequestsModal] = useState(false);
     const [requests, setRequests] = useState<FriendRequestItem[]>([]);
     const [isLoadingRequests, setIsLoadingRequests] = useState(false);
-    const [incomingCount] = useState(0);
+    const [incomingCount, setIncomingCount] = useState(0);
+
     const [showNewChatModal, setShowNewChatModal] = useState(false);
     const [showAddFriendModal, setShowAddFriendModal] = useState(false);
 
@@ -1046,7 +1133,7 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
         const resp = await apiClient.get("api/conversations/");
         const list = Array.isArray(resp.data) ? resp.data : resp.data?.results || [];
         const transformed: Contact[] = list.map((conv: any) => {
-          const cid = Number(conv.id ?? conv.conversation_id);
+          const cid = Number(conv.id ?? conv.conversation_id ?? conv.room_id ?? conv.room ?? conv.chat_id);
           const other = conv.other_user || conv.partner || conv.user;
           return {
             id: cid,
@@ -1075,6 +1162,31 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
       loadContacts();
     }, [loadContacts]);
 
+    // обновление превью при событии из чата
+    useEffect(() => {
+      const handler = (e: any) => {
+        const d = e?.detail || {};
+        const id = Number(d.conversationId);
+        if (!id) return;
+        setContacts((prev) => {
+          const idx = prev.findIndex((c) => c.id === id);
+          if (idx === -1) return prev;
+          const copy = prev.slice();
+          copy[idx] = {
+            ...copy[idx],
+            lastMessage: d.text || copy[idx].lastMessage,
+            lastMessageTime: d.created_at || new Date().toISOString(),
+          };
+          // Поднимаем диалог вверх
+          const item = copy[idx];
+          copy.splice(idx, 1);
+          return [item, ...copy];
+        });
+      };
+      window.addEventListener("humy:new-message", handler as any);
+      return () => window.removeEventListener("humy:new-message", handler as any);
+    }, []);
+
     /* ===== Друзья ===== */
     const loadFriends = useCallback(async () => {
       try {
@@ -1083,7 +1195,7 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
         const resp = await apiClient.get("api/friends/");
         const arr = Array.isArray(resp.data) ? resp.data : resp.data?.results || [];
         const mapped: Contact[] = arr.map((u: any) => ({
-          id: Number(u.id),
+          id: Number(u.id), // ВАЖНО: здесь id — это userId друга, не диалог!
           name: u.nickname || u.username || "Пользователь",
           avatar: u.avatar || null,
           isOnline: Boolean(u.is_online),
@@ -1102,6 +1214,61 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
       }
     }, [activeTab, friends.length, isLoadingFriends, loadFriends]);
 
+    /* ===== Заявки в друзья ===== */
+    const loadFriendRequests = useCallback(async () => {
+      try {
+        setIsLoadingRequests(true);
+        const endpoints = [
+          "api/friends/requests/",
+          "api/friend-requests/",
+        ];
+        let data: any[] = [];
+        for (const ep of endpoints) {
+          try {
+            const r = await apiClient.get(ep);
+            const arr = Array.isArray(r.data) ? r.data : r.data?.results || [];
+            if (arr.length) { data = arr; break; }
+            data = arr;
+          } catch {}
+        }
+        setRequests(data);
+        const inCnt = data.filter((r: any) => (r.status ?? "pending") === "pending" && (r.to_user?.id === userId)).length;
+        setIncomingCount(inCnt);
+      } catch {
+        setRequests([]);
+        setIncomingCount(0);
+      } finally {
+        setIsLoadingRequests(false);
+      }
+    }, [userId]);
+
+    const acceptRequest = useCallback(async (id: number) => {
+      const tries = [
+        () => apiClient.post(`api/friends/requests/${id}/accept/`, {}),
+        () => apiClient.post(`api/friend-requests/${id}/accept/`, {}),
+        () => apiClient.patch(`api/friends/requests/${id}/`, { status: "accepted" }),
+      ];
+      for (const fn of tries) {
+        try { await fn(); await loadFriendRequests(); await loadFriends(); return; } catch {}
+      }
+      // ignore fail
+    }, [loadFriendRequests, loadFriends]);
+
+    const rejectRequest = useCallback(async (id: number) => {
+      const tries = [
+        () => apiClient.post(`api/friends/requests/${id}/reject/`, {}),
+        () => apiClient.post(`api/friend-requests/${id}/reject/`, {}),
+        () => apiClient.patch(`api/friends/requests/${id}/`, { status: "rejected" }),
+      ];
+      for (const fn of tries) {
+        try { await fn(); await loadFriendRequests(); return; } catch {}
+      }
+    }, [loadFriendRequests]);
+
+    useEffect(() => {
+      if (showRequestsModal) loadFriendRequests();
+    }, [showRequestsModal, loadFriendRequests]);
+
     /* ===== Фильтры ===== */
     const filteredContacts = useMemo(
       () =>
@@ -1118,6 +1285,200 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
       [friends, searchQuery],
     );
 
+    /* ======= ВАЖНО: гарантированное открытие/создание приватного диалога ======= */
+
+    // пробуем разные эндпоинты/поля, чтобы получить (или создать) диалог и вернуть его id
+    const ensureConversationWithUser = useCallback(async (otherUserId: number): Promise<number> => {
+      // 1) сначала пытаемся найти уже существующий
+      const findTries: Array<() => Promise<any>> = [
+        () => apiClient.get(`api/conversations/with/${otherUserId}/`),
+        () => apiClient.get(`api/conversations/`, { params: { user_id: otherUserId } }),
+        () => apiClient.get(`api/conversations/`, { params: { user: otherUserId } }),
+        () => apiClient.get(`api/private-chats/`, { params: { user_id: otherUserId } }),
+        () => apiClient.get(`api/dialogs/`, { params: { user_id: otherUserId } }),
+      ];
+
+      const extractId = (data: any): number | null => {
+        if (!data) return null;
+        const item = Array.isArray(data?.results) ? data.results[0] : (Array.isArray(data) ? data[0] : data);
+        if (!item) return null;
+        const id = item.id ?? item.conversation_id ?? item.room_id ?? item.room ?? item.chat_id;
+        return id != null ? Number(id) : null;
+      };
+
+      for (const call of findTries) {
+        try {
+          const r = await call();
+          const id = extractId(r.data);
+          if (id) return id;
+        } catch {}
+      }
+
+      // 2) если не нашли — создаём
+      const bodies = [
+        { user_id: otherUserId },
+        { user: otherUserId },
+        { participant_id: otherUserId },
+        { to_user_id: otherUserId },
+        { friend_id: otherUserId },
+      ];
+      const createEndpoints = [
+        "api/conversations/",
+        "api/conversations/start/",
+        "api/private-chats/",
+        "api/dialogs/",
+      ];
+
+      for (const ep of createEndpoints) {
+        for (const body of bodies) {
+          try {
+            const r = await apiClient.post(ep, body);
+            const id = extractId(r.data);
+            if (id) return id;
+          } catch {}
+        }
+      }
+
+      throw new Error("Не удалось открыть или создать приватный диалог");
+    }, []);
+
+    const openChatWithFriend = useCallback(
+      async (friend: Contact) => {
+        try {
+          // Здесь friend.id — это userId друга!
+          const conversationId = await ensureConversationWithUser(friend.id);
+          const selected: Contact = {
+            id: conversationId, // ВАЖНО: устанавливаем id диалога
+            name: friend.name,
+            avatar: friend.avatar,
+            isOnline: friend.isOnline,
+          };
+          if (onSelectContact) onSelectContact(selected);
+          else setSelectedContactLocal(selected);
+        } catch (e) {
+          // Покажем ошибку в шапке списка
+          setContactsError("Не удалось открыть чат. Попробуйте ещё раз.");
+        }
+      },
+      [ensureConversationWithUser, onSelectContact],
+    );
+
+    /* ===== Модалка "Добавить в друзья" ===== */
+    const AddFriendModal: React.FC<{
+      open: boolean;
+      onClose: () => void;
+    }> = ({ open, onClose }) => {
+      const [q, setQ] = useState("");
+      const [loading, setLoading] = useState(false);
+      const [items, setItems] = useState<any[]>([]);
+      const [error, setError] = useState<string | null>(null);
+
+      const doSearch = async () => {
+        if (!q.trim()) return;
+        setLoading(true); setError(null);
+        const endpoints = [
+          (qq: string) => apiClient.get("api/users/search/", { params: { q: qq } }),
+          (qq: string) => apiClient.get("api/users/", { params: { search: qq, q: qq } }),
+          (qq: string) => apiClient.get("api/search/users/", { params: { q: qq } }),
+          (qq: string) => apiClient.get("api/friends/search_users/", { params: { q: qq } }),
+        ];
+        for (const call of endpoints) {
+          try {
+            const r = await call(q.trim());
+            const arr = Array.isArray(r.data) ? r.data : r.data?.results || [];
+            const norm = arr.map((u: any) => ({
+              id: Number(u.id ?? u.user_id ?? u.pk),
+              nickname: u.nickname || u.username || u.display_name || `ID ${u.id ?? u.user_id ?? u.pk}`,
+              avatar: u.avatar || null,
+            }));
+            setItems(norm);
+            setLoading(false);
+            return;
+          } catch {}
+        }
+        setItems([]);
+        setError("Не удалось найти пользователей");
+        setLoading(false);
+      };
+
+      const sendFriendRequest = async (uid: number) => {
+        const tries = [
+          () => apiClient.post("api/friends/requests/", { to_user_id: uid }),
+          () => apiClient.post("api/friends/requests/", { to_user: uid }),
+          () => apiClient.post("api/friends/request/", { to_user_id: uid }),
+          () => apiClient.post("api/friends/add/", { user_id: uid }),
+          () => apiClient.post("api/friends/add/", { friend_id: uid }),
+        ];
+        for (const fn of tries) {
+          try { await fn(); onClose(); return; } catch (e: any) {
+            const st = e?.response?.status;
+            const data = e?.response?.data;
+            if (st === 409 || (st === 400 && /already|exists|уже|duplicate/i.test(JSON.stringify(data || "")))) {
+              onClose(); return;
+            }
+          }
+        }
+        // ignore
+      };
+
+      if (!open) return null;
+      return (
+        <div className="fixed inset-0 z-[200000] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-zinc-900 border border-white/10 text-white">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Добавить в друзья</h3>
+              <Button variant="ghost" size="sm" onClick={onClose}>
+                Закрыть
+              </Button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div className="flex gap-2">
+                <Input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Никнейм…"
+                  className="flex-1 bg-white/10 border-white/20 text-white placeholder:text-white/60 focus:ring-white/30"
+                  leftIcon={<Search />}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doSearch(); } }}
+                />
+                <Button onClick={doSearch} className="bg-indigo-600 hover:bg-indigo-500 text-white">
+                  Найти
+                </Button>
+              </div>
+
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="ml-2 text-white/80">Поиск…</span>
+                </div>
+              ) : error ? (
+                <div className="text-white/70">{error}</div>
+              ) : items.length === 0 ? (
+                <div className="text-white/60">Введите никнейм и нажмите «Найти»</div>
+              ) : (
+                <ul className="space-y-2">
+                  {items.map((u) => (
+                    <li key={u.id} className="flex items-center justify-between rounded-xl border border-white/10 p-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full overflow-hidden bg-white/10 flex items-center justify-center">
+                          {u.avatar ? <img src={u.avatar} className="w-full h-full object-cover" /> : <User className="w-5 h-5" />}
+                        </div>
+                        <div className="font-medium">{u.nickname}</div>
+                      </div>
+                      <Button size="sm" className="bg-indigo-600 hover:bg-indigo-500 text-white" onClick={() => sendFriendRequest(u.id)}>
+                        <UserPlus className="w-4 h-4 mr-1" /> Добавить
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     return (
       <div className="flex h-full rounded-2xl overflow-hidden">
         {/* Список слева */}
@@ -1133,7 +1494,7 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
                   className={`px-3 py-1.5 rounded-lg text-sm transition ${
                     activeTab === "messages"
                       ? "bg-white text-black"
-                      : "text-white/80 hover:bg-white/10"
+                      : "text-white/80 hover:bg白/10"
                   }`}
                   onClick={() => setActiveTab("messages")}
                 >
@@ -1143,7 +1504,7 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
                   className={`px-3 py-1.5 rounded-lg text-sm transition ${
                     activeTab === "friends"
                       ? "bg-white text-black"
-                      : "text-white/80 hover:bg-white/10"
+                      : "text-white/80 hover:bg白/10"
                   }`}
                   onClick={() => setActiveTab("friends")}
                 >
@@ -1161,6 +1522,11 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
                     title="Заявки в друзья"
                   >
                     <Inbox className="w-4 h-4" />
+                    {incomingCount > 0 && (
+                      <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-[11px] font-semibold text-white flex items-center justify-center">
+                        {incomingCount > 99 ? "99+" : incomingCount}
+                      </span>
+                    )}
                   </Button>
                 )}
                 <Button
@@ -1219,21 +1585,7 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
                 loading={isLoadingFriends}
                 error={friendsError}
                 onRetry={loadFriends}
-                onOpenChat={(f) =>
-                  onSelectContact
-                    ? onSelectContact({
-                        id: f.id,
-                        name: f.name,
-                        avatar: f.avatar,
-                        isOnline: f.isOnline,
-                      } as Contact)
-                    : setSelectedContactLocal({
-                        id: f.id,
-                        name: f.name,
-                        avatar: f.avatar,
-                        isOnline: f.isOnline,
-                      } as Contact)
-                }
+                onOpenChat={openChatWithFriend}
                 onRemove={() => {}}
                 onBlock={() => {}}
               />
@@ -1252,7 +1604,7 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center text-white/70">
-                <MessageCircle className="w-16 h-16 mx-auto mb-4 text-white/30" />
+                <MessageCircle className="w-16 h-16 mx-auto mb-4 text_white/30" />
                 <h3 className="text-lg font-medium">Выберите диалог</h3>
                 <p className="text-sm">
                   Выберите контакт слева, чтобы открыть переписку
@@ -1262,18 +1614,22 @@ const PersonalMessages: React.FC<PersonalMessagesProps> = memo(
           )}
         </div>
 
-        {/* Модалка заявок (каркас) */}
+        {/* Модалка заявок */}
         {showRequestsModal && (
           <FriendRequestsModal
             tab={"incoming" as any}
             setTab={() => {}}
             requests={requests}
             loading={isLoadingRequests}
-            onAccept={() => {}}
-            onReject={() => {}}
+            onAccept={acceptRequest}
+            onReject={rejectRequest}
             onClose={() => setShowRequestsModal(false)}
           />
         )}
+
+        {/* Модалка «Добавить в друзья» */}
+        <AddFriendModal open={showNewChatModal /* не удаляем, если использовалось */ ? false : false} onClose={() => {}} />
+        <AddFriendModal open={showAddFriendModal} onClose={() => setShowAddFriendModal(false)} />
       </div>
     );
   },
